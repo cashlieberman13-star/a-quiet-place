@@ -1,32 +1,31 @@
-'use strict';
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
-import { generateRoomCode } from './shared/worldgen.js';
+import * as W from './shared/worldgen.js';
+import { fileURLToPath } from 'url';
 
-// Recreate __dirname support for ES Modules
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const PUBLIC_DIR = path.join(__dirname, 'public');
 
 const PORT = process.env.PORT || 8080;
 const HOST = process.argv.includes('--host') ? process.argv[process.argv.indexOf('--host') + 1] : '127.0.0.1';
 
 const TICK_HZ = 20, SNAP_HZ = 12;
 const MAX_PLAYERS = 8;
+
 const CANS_REQUIRED = 4;
-const FUEL_TIME = 60;      // seconds the truck needs
-const BLEED_TIME = 75;     // seconds until a downed player dies
+const FUEL_TIME = 60;    // seconds the truck needs
+const BLEED_TIME = 75;   // seconds until a downed player dies
 const REVIVE_TIME = 6;
 
-// ------------------------------------------------------------ static files
+// ------------------------------------------------------------- static files
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.ico': 'image/x-icon',
 };
 const ROOT = __dirname;
+
 
 const server = http.createServer((req, res) => {
   let url = decodeURIComponent(req.url.split('?')[0]);
