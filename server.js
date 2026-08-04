@@ -9,7 +9,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = process.env.PORT || 8080;
-const HOST = process.argv.includes('--host') ? process.argv[process.argv.indexOf('--host') + 1] : '127.0.0.1';
+const HOST = process.argv.includes('--host') ? process.argv[process.argv.indexOf('--host') + 1] : '0.0.0.0';
 
 const TICK_HZ = 20, SNAP_HZ = 12;
 const MAX_PLAYERS = 8;
