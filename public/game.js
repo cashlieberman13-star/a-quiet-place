@@ -1518,9 +1518,10 @@ class Game {
    BOOTSTRAP ENGINE CORE — Main Loop State Orchestrator
    ========================================================================== */
 // Start your custom game engine cleanly once the DOM loads
+// Remove immediate auto-initialization to stop early crashes
+// Remove immediate auto-initialization to stop early crashes
 window.addEventListener('DOMContentLoaded', () => {
-  // Check if a global configuration exists, otherwise pass an empty object
-  const config = window.QPConfig || {}; 
-  window.currentGameInstance = new Game(config);
+  console.log("DOM loaded. Awaiting user interaction to initialize Game configuration.");
 });
+
 
