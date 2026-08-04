@@ -92,7 +92,15 @@ function hearing(cre, x, z, loud) {
 class Room {
   constructor(code) {
     this.code = code;
-    this.seed = W.seedFromString(code);
+        // Safe manual string-to-seed hash fallback loop
+    let safeSeed = 0;
+    const cleanCode = String(code || 'QUIET');
+    for (let i = 0; i < cleanCode.length; i++) {
+      safeSeed = (safeSeed << 5) - safeSeed + cleanCode.charCodeAt(i);
+      safeSeed |= 0;
+    }
+    this.seed = Math.abs(safeSeed) || 42;
+
     this.players = new Map();
     this.creatures = [];
     this.phase = 'lobby';
