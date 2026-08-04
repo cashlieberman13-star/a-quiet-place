@@ -21,16 +21,16 @@
     border:1px solid rgba(216,212,200,.5);color:var(--bone);padding:12px 30px;font-size:13px;
     cursor:pointer;transition:.18s}
   button:hover{background:var(--bone);color:#05060a;border-color:var(--bone)}
-  button:disabled{opacity:.35;cursor:default}
   button.ghost{border-color:rgba(216,212,200,.22);font-size:11px;padding:9px 18px}
   input[type=text]{background:none;border:none;border-bottom:1px solid rgba(216,212,200,.4);
     color:var(--bone);font-family:var(--disp);letter-spacing:.2em;text-transform:uppercase;
-    font-size:16px;padding:8px 4px;width:260px;outline:none;text-align:center}
-  input[type=text]::placeholder{color:rgba(216,212,200,.25)}
+    font-size:16px;padding:8px 4px;outline:none;text-align:center}
+  input[type=text]::placeholder{color:rgba(216,212,200,.25);font-size:12px}
+  #name{width:240px} #room{width:200px}
+  .joinrow{display:flex;gap:22px;flex-wrap:wrap;justify-content:center;align-items:flex-end}
 
-  /* ---------- title / end screens ---------- */
   .screen{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;
-    justify-content:center;gap:22px;background:radial-gradient(ellipse at 50% 60%,#070a12 0%,#020308 70%);z-index:40}
+    justify-content:center;gap:20px;background:radial-gradient(ellipse at 50% 60%,#070a12 0%,#020308 70%);z-index:40}
   #rings{position:absolute;inset:0;overflow:hidden;pointer-events:none}
   #rings i{position:absolute;left:50%;top:58%;width:120px;height:120px;margin:-60px 0 0 -60px;
     border:1px solid rgba(216,212,200,.16);border-radius:50%;animation:ring 7s linear infinite}
@@ -44,9 +44,9 @@
     letter-spacing:.14em;text-transform:uppercase;text-align:center;
     text-shadow:0 0 34px rgba(216,212,200,.14);animation:flicker 6s infinite}
   @keyframes flicker{0%,93%,95.5%,100%{opacity:1}94%,95%{opacity:.5}}
-  .tag{font-size:15px;color:var(--dim);letter-spacing:.06em;text-align:center;max-width:520px}
+  .tag{font-size:15px;color:var(--dim);letter-spacing:.06em;text-align:center;max-width:540px}
   .tag em{color:var(--bone);font-style:normal}
-  .rules{display:flex;gap:26px;flex-wrap:wrap;justify-content:center;margin-top:6px;max-width:760px}
+  .rules{display:flex;gap:26px;flex-wrap:wrap;justify-content:center;margin-top:4px;max-width:820px}
   .rules div{font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--dim);
     text-transform:uppercase;line-height:1.9;text-align:left}
   .rules b{color:var(--bone);font-weight:400}
@@ -54,17 +54,15 @@
   .foot{position:absolute;bottom:20px;font-family:var(--mono);font-size:9px;letter-spacing:.3em;
     color:rgba(125,122,112,.5);text-transform:uppercase}
 
-  /* ---------- mic check ---------- */
   #miccheck .meter{width:340px;height:8px;border:1px solid rgba(216,212,200,.3);position:relative}
   #mcFill{position:absolute;inset:1px auto 1px 1px;width:0%;background:var(--bone);transition:width .05s}
   #mcThr{position:absolute;top:-5px;bottom:-5px;width:2px;background:var(--red);left:50%}
-  #mcStatus{font-family:var(--mono);font-size:11px;letter-spacing:.3em;color:var(--dim);text-transform:uppercase;min-height:16px}
+  #mcStatus{font-family:var(--mono);font-size:11px;letter-spacing:.3em;color:var(--dim);text-transform:uppercase;min-height:16px;text-align:center}
 
-  /* ---------- HUD ---------- */
   #hud{position:fixed;inset:0;pointer-events:none;z-index:20;font-family:var(--mono)}
   #obj{position:absolute;top:16px;left:18px;font-size:10px;letter-spacing:.24em;color:var(--dim);text-transform:uppercase;line-height:2}
   #obj b{color:var(--amber);font-weight:400}
-  #obj .wake{color:var(--red)}
+  #obj .wake{color:var(--red)} #obj .room{color:var(--bone)}
   #log{position:absolute;left:18px;bottom:66px;display:flex;flex-direction:column-reverse;gap:4px;max-width:360px}
   #log div{font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--bone);
     background:rgba(2,3,8,.55);padding:4px 8px;border-left:2px solid rgba(216,212,200,.35);
@@ -116,16 +114,20 @@
 
 <div id="title" class="screen">
   <div id="rings"><i></i><i></i><i></i><i></i></div>
-  <div class="eyebrow">co-op survival · 1–8 players · <b>● live audio feed</b></div>
+  <div class="eyebrow">co-op survival · 1–8 per room · <b>● live audio feed</b></div>
   <h1>A Quiet<br>Place</h1>
   <div class="tag">It cannot see you. <em>It can hear everything.</em><br>
     Your real microphone is wired straight into the dark — every cough, every word, every chair scrape.</div>
-  <input type="text" id="name" maxlength="14" placeholder="YOUR NAME" autocomplete="off">
+  <div class="joinrow">
+    <input type="text" id="name" maxlength="14" placeholder="YOUR NAME" autocomplete="off">
+    <input type="text" id="room" maxlength="6" placeholder="ROOM CODE · BLANK = NEW" autocomplete="off">
+  </div>
   <button id="begin">Step into the dark</button>
   <div class="rules">
     <div><b>WASD</b> move<br><b>SHIFT</b> run — loud<br><b>C</b> sneak — silent</div>
     <div><b>E</b> doors · fuses · revive<br><b>CLICK</b> throw stone — decoy<br><b>HEADPHONES</b> strongly advised</div>
     <div class="warn">find <b>5 fuses</b>, power the radio tower.<br>doors creak. running is a death wish.<br><b>silence is survival.</b></div>
+    <div><b>ROOMS</b> — blank code starts a new night.<br>share your link <b>?room=CODE</b><br>so friends join <b>your</b> dark.</div>
   </div>
   <div class="foot">terrain · buildings · creature · sound — all generated in code, zero assets</div>
 </div>
