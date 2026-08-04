@@ -1034,8 +1034,15 @@ class Net {
 class Game {
   constructor(cfg) {
     this.cfg = cfg;
-    this.mic = cfg.mic;
-    this.sfx = new Sfx(); this.sfx.init(this.mic.ctx);
+        this.mic = cfg && cfg.mic ? cfg.mic : null;
+    this.sfx = new Sfx(); 
+    // Only pass the context if the microphone has been enabled and initialized
+    if (this.mic && this.mic.ctx) {
+      this.sfx.init(this.mic.ctx);
+    } else {
+      this.sfx.init(null);
+    }
+
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.6));
