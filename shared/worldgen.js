@@ -1,11 +1,11 @@
-/* shared/worldgen.js — deterministic world generation (Node + browser) */
+/* shared/worldgen.js — deterministic world (Node + browser). Units: meters. */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.WorldGen = factory();
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
-
-  var SIZE = 2400, WALL_T = 10, DOOR_W = 46, PR = 10, CR = 13;
+  var SIZE = 1200, WALL_T = 0.3, DOOR_W = 1.6, PR = 0.5, CR = 0.6;
+  var NIGHT = 300, DAY = 600;
 
   function mulberry32(seed) {
     var a = seed >>> 0;
@@ -16,101 +16,103 @@
       return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     };
   }
+  function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+  function shuffle(arr, rnd) { for (var i = arr.length - 1; i > 0; i--) { var j = (rnd() * (i + 1)) | 0, t = arr[i]; arr[i] = arr[j]; arr[j] = t; } return arr; }
+  function rectsOverlap(a, b, pad) { return a.x < b.x + b.w + pad && a.x + a.w + pad > b.x && a.z < b.z + b.h + pad && a.z + a.h + pad > b.z; }
+  function pointInRect(px, pz, r, pad) { pad = pad || 0; return px > r.x - pad && px < r.x + r.w + pad && pz > r.z - pad && pz < r.z + r.h + pad; }
 
-  function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
-
-  function shuffle(arr, rnd) {
-    for (var i = arr.length - 1; i > 0; i--) {
-      var j = (rnd() * (i + 1)) | 0, t = arr[i]; arr[i] = arr[j]; arr[j] = t;
-    }
-    return arr;
+  /* stable integer hash → value noise (same on server & client) */
+  function h2(x, y) {
+    var n = (x * 374761393 + y * 668265263) | 0;
+    n = Math.imul(n ^ (n >>> 13), 1274126177);
+    return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
+  }
+  function vnoise(x, y) {
+    var ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+    fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
+    var a = h2(ix, iy), b = h2(ix + 1, iy), c = h2(ix, iy + 1), d = h2(ix + 1, iy + 1);
+    return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
+  }
+  function roadX(z) { return SIZE / 2 + Math.sin(z * 0.012) * 46; }
+  function roadZ(x) { return SIZE / 2 + Math.sin(x * 0.009) * 58; }
+  function height(x, z) {
+    var n = vnoise(x * 0.008, z * 0.008) * 6 + vnoise(x * 0.03, z * 0.03) * 1.4 - 3;
+    var rd = Math.min(Math.abs(x - roadX(z)), Math.abs(z - roadZ(x)));
+    var f = clamp((rd - 5) / 16, 0, 1);
+    var dp = Math.hypot(x - SIZE / 2, z - SIZE / 2);
+    var pf = clamp((dp - 34) / 30, 0, 1);
+    var flat = Math.min(f, pf);
+    return n * (0.12 + 0.88 * flat * flat) - (1 - f) * 0.35;
   }
 
-  function rectsOverlap(a, b, pad) {
-    return a.x < b.x + b.w + pad && a.x + a.w + pad > b.x &&
-           a.y < b.y + b.h + pad && a.y + a.h + pad > b.y;
-  }
-
-  function pointInRect(px, py, r, pad) {
-    pad = pad || 0;
-    return px > r.x - pad && px < r.x + r.w + pad && py > r.y - pad && py < r.y + r.h + pad;
-  }
-
-  function circleRectResolve(px, py, rad, rc) {
-    var nx = clamp(px, rc.x, rc.x + rc.w), ny = clamp(py, rc.y, rc.y + rc.h);
-    var dx = px - nx, dy = py - ny, d2 = dx * dx + dy * dy;
+  function circleRectResolve(px, pz, rad, rc) {
+    var nx = clamp(px, rc.x, rc.x + rc.w), nz = clamp(pz, rc.z, rc.z + rc.h);
+    var dx = px - nx, dz = pz - nz, d2 = dx * dx + dz * dz;
     if (d2 >= rad * rad) return null;
-    if (d2 > 1e-9) {
-      var d = Math.sqrt(d2), push = (rad - d) / d;
-      return { x: px + dx * push, y: py + dy * push };
-    }
-    var l = px - rc.x, rr = rc.x + rc.w - px, t = py - rc.y, b = rc.y + rc.h - py;
+    if (d2 > 1e-9) { var d = Math.sqrt(d2), push = (rad - d) / d; return { x: px + dx * push, z: pz + dz * push }; }
+    var l = px - rc.x, rr = rc.x + rc.w - px, t = pz - rc.z, b = rc.z + rc.h - pz;
     var m = Math.min(l, rr, t, b);
-    if (m === l) return { x: rc.x - rad, y: py };
-    if (m === rr) return { x: rc.x + rc.w + rad, y: py };
-    if (m === t) return { x: px, y: rc.y - rad };
-    return { x: px, y: rc.y + rc.h + rad };
+    if (m === l) return { x: rc.x - rad, z: pz };
+    if (m === rr) return { x: rc.x + rc.w + rad, z: pz };
+    if (m === t) return { x: px, z: rc.z - rad };
+    return { x: px, z: rc.z + rc.h + rad };
   }
-
-  /* resolve a moving circle against rects + trees. returns corrected pos + hit list */
-  function resolveCircle(px, py, rad, rects, trees, size) {
+  function resolveCircle(px, pz, rad, rects, trees, size) {
     var hits = [];
-    px = clamp(px, rad, size - rad); py = clamp(py, rad, size - rad);
+    px = clamp(px, rad, size - rad); pz = clamp(pz, rad, size - rad);
     for (var pass = 0; pass < 2; pass++) {
       var i, res;
       for (i = 0; i < rects.length; i++) {
-        res = circleRectResolve(px, py, rad, rects[i]);
-        if (res) { px = res.x; py = res.y; hits.push(rects[i]); }
+        res = circleRectResolve(px, pz, rad, rects[i]);
+        if (res) { px = res.x; pz = res.z; hits.push(rects[i]); }
       }
       if (trees) for (i = 0; i < trees.length; i++) {
-        var tr = trees[i], dx = px - tr.x, dy = py - tr.y, rr = rad + tr.r, d2 = dx * dx + dy * dy;
+        var tr = trees[i], dx = px - tr.x, dz = pz - tr.z, rr = rad + tr.r, d2 = dx * dx + dz * dz;
         if (d2 < rr * rr) {
-          if (d2 > 1e-9) { var d = Math.sqrt(d2); px = tr.x + dx / d * rr; py = tr.y + dy / d * rr; }
-          else { px = tr.x + rr; }
+          if (d2 > 1e-9) { var d = Math.sqrt(d2); px = tr.x + dx / d * rr; pz = tr.z + dz / d * rr; }
+          else px = tr.x + rr;
           hits.push(tr);
         }
       }
     }
-    return { x: px, y: py, hits: hits };
+    return { x: px, z: pz, hits: hits };
   }
 
   function buildWalls(b, rnd, walls, doors) {
-    var T = WALL_T, D = DOOR_W, x = b.x, y = b.y, w = b.w, h = b.h;
-    var sides = shuffle([0, 1, 2, 3], rnd);            /* 0=N 1=E 2=S 3=W */
+    var T = WALL_T, D = DOOR_W, x = b.x, z = b.z, w = b.w, h = b.h;
+    var sides = shuffle([0, 1, 2, 3], rnd);
     var defs = [{ s: sides[0], f: 0.25 + rnd() * 0.5 }];
-    if (rnd() < 0.55 && w + h > 320) defs.push({ s: sides[1], f: 0.25 + rnd() * 0.5 });
+    if (rnd() < 0.55 && w + h > 14) defs.push({ s: sides[1], f: 0.25 + rnd() * 0.5 });
     function doorFor(sd) { for (var i = 0; i < defs.length; i++) if (defs[i].s === sd) return defs[i]; return null; }
-    function seg(ax, ay, aw, ah) { if (aw > 1 && ah > 1) walls.push({ x: Math.round(ax), y: Math.round(ay), w: Math.round(aw), h: Math.round(ah) }); }
+    function seg(ax, az, aw, ah) { if (aw > 0.05 && ah > 0.05) walls.push({ x: +ax.toFixed(2), z: +az.toFixed(2), w: +aw.toFixed(2), h: +ah.toFixed(2) }); }
     function side(sd) {
-      var horiz = sd === 0 || sd === 2, len = horiz ? w : h, base = horiz ? x : y;
+      var horiz = sd === 0 || sd === 2, len = horiz ? w : h, base = horiz ? x : z;
       function line(a0, a1) {
-        if (a1 - a0 < 2) return;
-        if (horiz) seg(base + a0, sd === 0 ? y : y + h - T, a1 - a0, T);
+        if (a1 - a0 < 0.05) return;
+        if (horiz) seg(base + a0, sd === 0 ? z : z + h - T, a1 - a0, T);
         else seg(sd === 3 ? x : x + w - T, base + a0, T, a1 - a0);
       }
       var dd = doorFor(sd);
       if (!dd) { line(0, len); return; }
-      var gs = Math.round(dd.f * (len - D));
+      var gs = Math.round(dd.f * (len - D) * 100) / 100;
       line(0, gs); line(gs + D, len);
       var dr;
-      if (horiz) dr = { x: base + gs, y: sd === 0 ? y : y + h - T, w: D, h: T };
-      else dr = { x: sd === 3 ? x : x + w - T, y: base + gs, w: T, h: D };
+      if (horiz) dr = { x: base + gs, z: sd === 0 ? z : z + h - T, w: D, h: T };
+      else dr = { x: sd === 3 ? x : x + w - T, z: base + gs, w: T, h: D };
       dr.b = b.i; dr.side = sd;
       doors.push(dr);
     }
     side(0); side(1); side(2); side(3);
-    if (rnd() < 0.6 && w > 190 && h > 160) {           /* interior wall with a gap */
-      var gap = 46;
+    if (rnd() < 0.5 && w > 10 && h > 9) {
+      var gap = 1.7;
       if (w >= h) {
-        var ix = x + Math.round(w * (0.45 + rnd() * 0.2));
-        var g1 = y + T + Math.round(rnd() * (h - 2 * T - gap));
-        seg(ix, y + T, T, g1 - (y + T));
-        seg(ix, g1 + gap, T, (y + h - T) - (g1 + gap));
+        var ix = x + Math.round(w * (0.45 + rnd() * 0.2) * 10) / 10;
+        var g1 = z + T + Math.round(rnd() * (h - 2 * T - gap) * 10) / 10;
+        seg(ix, z + T, T, g1 - (z + T)); seg(ix, g1 + gap, T, (z + h - T) - (g1 + gap));
       } else {
-        var iy = y + Math.round(h * (0.45 + rnd() * 0.2));
-        var g2 = x + T + Math.round(rnd() * (w - 2 * T - gap));
-        seg(x + T, iy, g2 - (x + T), T);
-        seg(g2 + gap, iy, (x + w - T) - (g2 + gap), T);
+        var iz = z + Math.round(h * (0.45 + rnd() * 0.2) * 10) / 10;
+        var g2 = x + T + Math.round(rnd() * (w - 2 * T - gap) * 10) / 10;
+        seg(x + T, iz, g2 - (x + T), T); seg(g2 + gap, iz, (x + w - T) - (g2 + gap), T);
       }
     }
   }
@@ -118,83 +120,65 @@
   function generate(seed) {
     var rnd = mulberry32(seed);
     var walls = [], doors = [], trees = [], fuses = [], waypoints = [], buildings = [];
-    var plaza = { x: SIZE / 2, y: SIZE / 2, r: 180 };
-    var cell = SIZE / 4;
+    var plaza = { x: SIZE / 2, z: SIZE / 2, r: 30 };
 
-    /* --- buildings on a jittered grid ring, center kept for the plaza --- */
-    var spots = [];
-    for (var gx = 0; gx < 4; gx++) for (var gy = 0; gy < 4; gy++) {
-      if (gx >= 1 && gx <= 2 && gy >= 1 && gy <= 2) continue;
-      spots.push([gx, gy]);
-    }
-    shuffle(spots, rnd);
-    for (var s = 0; s < spots.length && buildings.length < 8; s++) {
-      var bw = 150 + ((rnd() * 5) | 0) * 24, bh = 140 + ((rnd() * 5) | 0) * 24;
-      var bx = clamp((spots[s][0] + 0.5) * cell - bw / 2 + (rnd() - 0.5) * cell * 0.45, 70, SIZE - 70 - bw);
-      var by = clamp((spots[s][1] + 0.5) * cell - bh / 2 + (rnd() - 0.5) * cell * 0.45, 70, SIZE - 70 - bh);
-      var b = { x: Math.round(bx), y: Math.round(by), w: bw, h: bh, i: buildings.length };
-      var ok = true, k;
-      for (k = 0; k < buildings.length; k++) if (rectsOverlap(b, buildings[k], 90)) { ok = false; break; }
-      if (ok) {
-        var cx = clamp(plaza.x, b.x, b.x + b.w), cy = clamp(plaza.y, b.y, b.y + b.h);
-        var ddx = plaza.x - cx, ddy = plaza.y - cy;
-        if (ddx * ddx + ddy * ddy < (plaza.r + 90) * (plaza.r + 90)) ok = false;
-      }
+    for (var i = 0; i < 500 && buildings.length < 26; i++) {
+      var bw = 7 + rnd() * 7, bh = 6 + rnd() * 6;
+      var bx = 60 + rnd() * (SIZE - 120 - bw), bz = 60 + rnd() * (SIZE - 120 - bh);
+      var b = { x: +bx.toFixed(1), z: +bz.toFixed(1), w: +bw.toFixed(1), h: +bh.toFixed(1), i: buildings.length };
+      var cx = b.x + b.w / 2, cz = b.z + b.h / 2;
+      if (Math.min(Math.abs(cx - roadX(cz)), Math.abs(cz - roadZ(cx))) < 16) continue;
+      if (Math.hypot(cx - plaza.x, cz - plaza.z) < 70) continue;
+      var ok = true;
+      for (var k = 0; k < buildings.length; k++) if (rectsOverlap(b, buildings[k], 14)) { ok = false; break; }
       if (!ok) continue;
       buildings.push(b);
       buildWalls(b, rnd, walls, doors);
     }
 
-    /* --- fuses: inside distinct buildings --- */
     var chosen = shuffle(buildings.slice(), rnd).slice(0, Math.min(5, buildings.length));
     for (var fi = 0; fi < chosen.length; fi++) {
       var bb = chosen[fi], fp = null;
-      for (var tr2 = 0; tr2 < 16 && !fp; tr2++) {
-        var fx = bb.x + 30 + rnd() * (bb.w - 60), fy = bb.y + 30 + rnd() * (bb.h - 60), clear = true;
-        for (var wi = 0; wi < walls.length; wi++) if (pointInRect(fx, fy, walls[wi], 22)) { clear = false; break; }
-        if (clear) fp = { x: Math.round(fx), y: Math.round(fy) };
+      for (var t2 = 0; t2 < 16 && !fp; t2++) {
+        var fx = bb.x + 1.2 + rnd() * (bb.w - 2.4), fz = bb.z + 1.2 + rnd() * (bb.h - 2.4), clear = true;
+        for (var wi = 0; wi < walls.length; wi++) if (pointInRect(fx, fz, walls[wi], 0.8)) { clear = false; break; }
+        if (clear) fp = { x: +fx.toFixed(1), z: +fz.toFixed(1) };
       }
-      if (fp) fuses.push({ id: fi, x: fp.x, y: fp.y, b: bb.i });
+      if (fp) fuses.push({ id: fi, x: fp.x, z: fp.z, b: bb.i });
     }
 
-    /* --- creature waypoints: just outside every door + open field --- */
     for (var di = 0; di < doors.length; di++) {
-      var dr = doors[di], dcx = dr.x + dr.w / 2, dcy = dr.y + dr.h / 2, o = 46;
-      var wx = dcx, wy = dcy;
-      if (dr.side === 0) wy = dr.y - o;
-      else if (dr.side === 2) wy = dr.y + dr.h + o;
-      else if (dr.side === 3) wx = dr.x - o;
-      else wx = dr.x + dr.w + o;
-      waypoints.push({ x: Math.round(wx), y: Math.round(wy) });
+      var dr = doors[di], dcx = dr.x + dr.w / 2, dcz = dr.z + dr.h / 2, o = 2;
+      var wx = dcx, wz = dcz;
+      if (dr.side === 0) wz = dr.z - o; else if (dr.side === 2) wz = dr.z + dr.h + o;
+      else if (dr.side === 3) wx = dr.x - o; else wx = dr.x + dr.w + o;
+      waypoints.push({ x: +wx.toFixed(1), z: +wz.toFixed(1) });
     }
-    for (var wp = 0; wp < 16; wp++) {
-      var px = 120 + rnd() * (SIZE - 240), py = 120 + rnd() * (SIZE - 240), inside = false;
-      for (var bi = 0; bi < buildings.length; bi++) if (pointInRect(px, py, buildings[bi], 60)) { inside = true; break; }
-      if (!inside) waypoints.push({ x: Math.round(px), y: Math.round(py) });
+    for (var wp = 0; wp < 40; wp++) {
+      var px = 60 + rnd() * (SIZE - 120), pz = 60 + rnd() * (SIZE - 120), inside = false;
+      for (var bi = 0; bi < buildings.length; bi++) if (pointInRect(px, pz, buildings[bi], 4)) { inside = true; break; }
+      if (!inside) waypoints.push({ x: +px.toFixed(1), z: +pz.toFixed(1) });
     }
-    waypoints.push({ x: plaza.x, y: plaza.y + plaza.r + 60 });
+    var spawn = { x: plaza.x, z: plaza.z + plaza.r + 12 };
 
-    var spawn = { x: Math.round(plaza.x), y: Math.round(plaza.y + plaza.r + 70) };
-
-    /* --- trees --- */
-    for (var ti = 0; ti < 500 && trees.length < 150; ti++) {
-      var tx = 50 + rnd() * (SIZE - 100), ty = 50 + rnd() * (SIZE - 100), bad = false;
-      var dpx = tx - plaza.x, dpy = ty - plaza.y;
-      if (dpx * dpx + dpy * dpy < (plaza.r + 60) * (plaza.r + 60)) bad = true;
-      if (!bad) for (var bi2 = 0; bi2 < buildings.length; bi2++) if (pointInRect(tx, ty, buildings[bi2], 46)) { bad = true; break; }
+    for (var ti = 0; ti < 2200 && trees.length < 420; ti++) {
+      var tx = 40 + rnd() * (SIZE - 80), tz = 40 + rnd() * (SIZE - 80), bad = false;
+      if (Math.min(Math.abs(tx - roadX(tz)), Math.abs(tz - roadZ(tx))) < 7) bad = true;
+      if (!bad && Math.hypot(tx - plaza.x, tz - plaza.z) < 45) bad = true;
+      if (!bad) for (var bi2 = 0; bi2 < buildings.length; bi2++) if (pointInRect(tx, tz, buildings[bi2], 3)) { bad = true; break; }
       if (!bad) for (var wp2 = 0; wp2 < waypoints.length; wp2++) {
-        var dwx = tx - waypoints[wp2].x, dwy = ty - waypoints[wp2].y;
-        if (dwx * dwx + dwy * dwy < 70 * 70) { bad = true; break; }
+        var dwx = tx - waypoints[wp2].x, dwz = tz - waypoints[wp2].z;
+        if (dwx * dwx + dwz * dwz < 36) { bad = true; break; }
       }
-      if (!bad) { var dsx = tx - spawn.x, dsy = ty - spawn.y; if (dsx * dsx + dsy * dsy < 130 * 130) bad = true; }
-      if (!bad) trees.push({ x: Math.round(tx), y: Math.round(ty), r: 9, cr: 22 + Math.round(rnd() * 16) });
+      if (!bad) { var dsx = tx - spawn.x, dsz = tz - spawn.z; if (dsx * dsx + dsz * dsz < 400) bad = true; }
+      if (!bad) trees.push({ x: +tx.toFixed(1), z: +tz.toFixed(1), r: 0.35, cr: +(2.2 + rnd() * 1.8).toFixed(1) });
     }
 
-    return { seed: seed, size: SIZE, plaza: plaza, buildings: buildings, walls: walls,
-             doors: doors, trees: trees, fuses: fuses, waypoints: waypoints, spawn: spawn };
+    return { seed: seed, size: SIZE, plaza: plaza, buildings: buildings, walls: walls, doors: doors,
+             trees: trees, fuses: fuses, waypoints: waypoints, spawn: spawn };
   }
 
-  return { SIZE: SIZE, WALL_T: WALL_T, DOOR_W: DOOR_W, PR: PR, CR: CR,
-           generate: generate, mulberry32: mulberry32, resolveCircle: resolveCircle,
-           pointInRect: pointInRect, clamp: clamp };
+  return { SIZE: SIZE, WALL_T: WALL_T, DOOR_W: DOOR_W, PR: PR, CR: CR, NIGHT: NIGHT, DAY: DAY,
+           generate: generate, mulberry32: mulberry32, resolveCircle: resolveCircle, pointInRect: pointInRect,
+           height: height, roadX: roadX, roadZ: roadZ, vnoise: vnoise, clamp: clamp };
 });
