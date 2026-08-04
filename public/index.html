@@ -18,19 +18,16 @@
   canvas#cv{position:fixed;inset:0;display:block}
   .hidden{display:none!important}
   button{font-family:var(--disp);letter-spacing:.28em;text-transform:uppercase;background:none;
-    border:1px solid rgba(216,212,200,.5);color:var(--bone);padding:12px 30px;font-size:13px;
-    cursor:pointer;transition:.18s}
+    border:1px solid rgba(216,212,200,.5);color:var(--bone);padding:12px 30px;font-size:13px;cursor:pointer;transition:.18s}
   button:hover{background:var(--bone);color:#05060a;border-color:var(--bone)}
   button.ghost{border-color:rgba(216,212,200,.22);font-size:11px;padding:9px 18px}
-  input[type=text]{background:none;border:none;border-bottom:1px solid rgba(216,212,200,.4);
-    color:var(--bone);font-family:var(--disp);letter-spacing:.2em;text-transform:uppercase;
-    font-size:16px;padding:8px 4px;outline:none;text-align:center}
+  input[type=text]{background:none;border:none;border-bottom:1px solid rgba(216,212,200,.4);color:var(--bone);
+    font-family:var(--disp);letter-spacing:.2em;text-transform:uppercase;font-size:16px;padding:8px 4px;outline:none;text-align:center}
   input[type=text]::placeholder{color:rgba(216,212,200,.25);font-size:12px}
   #name{width:240px} #room{width:200px}
   .joinrow{display:flex;gap:22px;flex-wrap:wrap;justify-content:center;align-items:flex-end}
-
-  .screen{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;
-    justify-content:center;gap:20px;background:radial-gradient(ellipse at 50% 60%,#070a12 0%,#020308 70%);z-index:40}
+  .screen{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;
+    background:radial-gradient(ellipse at 50% 60%,#070a12 0%,#020308 70%);z-index:40}
   #rings{position:absolute;inset:0;overflow:hidden;pointer-events:none}
   #rings i{position:absolute;left:50%;top:58%;width:120px;height:120px;margin:-60px 0 0 -60px;
     border:1px solid rgba(216,212,200,.16);border-radius:50%;animation:ring 7s linear infinite}
@@ -40,56 +37,57 @@
   .eyebrow{font-family:var(--mono);font-size:10px;letter-spacing:.4em;color:var(--dim);text-transform:uppercase}
   .eyebrow b{color:var(--red);font-weight:400;animation:blink 1.6s steps(2) infinite}
   @keyframes blink{50%{opacity:.15}}
-  h1{font-family:var(--disp);font-weight:700;font-size:clamp(46px,9vw,110px);line-height:.92;
-    letter-spacing:.14em;text-transform:uppercase;text-align:center;
-    text-shadow:0 0 34px rgba(216,212,200,.14);animation:flicker 6s infinite}
+  h1{font-family:var(--disp);font-weight:700;font-size:clamp(42px,8vw,96px);line-height:.92;letter-spacing:.14em;
+    text-transform:uppercase;text-align:center;text-shadow:0 0 34px rgba(216,212,200,.14);animation:flicker 6s infinite}
   @keyframes flicker{0%,93%,95.5%,100%{opacity:1}94%,95%{opacity:.5}}
-  .tag{font-size:15px;color:var(--dim);letter-spacing:.06em;text-align:center;max-width:540px}
+  .tag{font-size:14px;color:var(--dim);letter-spacing:.06em;text-align:center;max-width:560px}
   .tag em{color:var(--bone);font-style:normal}
-  .rules{display:flex;gap:26px;flex-wrap:wrap;justify-content:center;margin-top:4px;max-width:820px}
-  .rules div{font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--dim);
-    text-transform:uppercase;line-height:1.9;text-align:left}
+  .rules{display:flex;gap:22px;flex-wrap:wrap;justify-content:center;max-width:900px}
+  .rules div{font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:var(--dim);text-transform:uppercase;line-height:1.9;text-align:left}
   .rules b{color:var(--bone);font-weight:400}
   .rules .warn b{color:var(--red)}
-  .foot{position:absolute;bottom:20px;font-family:var(--mono);font-size:9px;letter-spacing:.3em;
-    color:rgba(125,122,112,.5);text-transform:uppercase}
-
+  .foot{position:absolute;bottom:16px;font-family:var(--mono);font-size:9px;letter-spacing:.3em;color:rgba(125,122,112,.5);text-transform:uppercase}
   #miccheck .meter{width:340px;height:8px;border:1px solid rgba(216,212,200,.3);position:relative}
   #mcFill{position:absolute;inset:1px auto 1px 1px;width:0%;background:var(--bone);transition:width .05s}
   #mcThr{position:absolute;top:-5px;bottom:-5px;width:2px;background:var(--red);left:50%}
   #mcStatus{font-family:var(--mono);font-size:11px;letter-spacing:.3em;color:var(--dim);text-transform:uppercase;min-height:16px;text-align:center}
-
   #hud{position:fixed;inset:0;pointer-events:none;z-index:20;font-family:var(--mono)}
-  #obj{position:absolute;top:16px;left:18px;font-size:10px;letter-spacing:.24em;color:var(--dim);text-transform:uppercase;line-height:2}
-  #obj b{color:var(--amber);font-weight:400}
-  #obj .wake{color:var(--red)} #obj .room{color:var(--bone)}
-  #log{position:absolute;left:18px;bottom:66px;display:flex;flex-direction:column-reverse;gap:4px;max-width:360px}
-  #log div{font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--bone);
-    background:rgba(2,3,8,.55);padding:4px 8px;border-left:2px solid rgba(216,212,200,.35);
-    animation:logfade 9s forwards}
-  #log div.bad{border-color:var(--red);color:#e8b9bc}
-  #log div.good{border-color:var(--amber)}
+  #obj{position:absolute;top:14px;left:16px;font-size:10px;letter-spacing:.22em;color:var(--dim);text-transform:uppercase;line-height:2}
+  #obj b{color:var(--amber);font-weight:400} #obj .wake{color:var(--red)} #obj .room{color:var(--bone)}
+  #clock{position:absolute;top:14px;left:50%;transform:translateX(-50%);font-size:12px;letter-spacing:.3em;text-transform:uppercase}
+  #clock.night{color:var(--red)} #clock.day{color:var(--bone)}
+  #log{position:absolute;left:16px;bottom:64px;display:flex;flex-direction:column-reverse;gap:4px;max-width:380px}
+  #log div{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--bone);background:rgba(2,3,8,.55);
+    padding:4px 8px;border-left:2px solid rgba(216,212,200,.35);animation:logfade 9s forwards}
+  #log div.bad{border-color:var(--red);color:#e8b9bc} #log div.good{border-color:var(--amber)}
   @keyframes logfade{0%,80%{opacity:1}100%{opacity:0}}
-  #prompt{position:absolute;left:50%;bottom:120px;transform:translateX(-50%);font-size:11px;
-    letter-spacing:.3em;color:var(--bone);text-transform:uppercase;text-shadow:0 0 10px #000}
-  #mic{position:absolute;left:50%;bottom:22px;transform:translateX(-50%);width:240px}
-  #mic .lbl{font-size:9px;letter-spacing:.34em;color:var(--dim);text-transform:uppercase;
-    display:flex;justify-content:space-between;margin-bottom:5px}
-  #mic .bar{height:7px;border:1px solid rgba(216,212,200,.28);position:relative;background:rgba(2,3,8,.5)}
-  #micFill{position:absolute;inset:1px auto 1px 1px;width:0%;background:#6f8f6a;transition:background .1s}
-  #micThr{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--red)}
-  #mic.hot .bar{border-color:var(--red)} #mic.hot #micFill{background:var(--red)}
-  #mic.off .lbl em{color:var(--red);font-style:normal}
-  #rocksHud{position:absolute;right:18px;bottom:22px;font-size:10px;letter-spacing:.24em;color:var(--dim);text-transform:uppercase;text-align:right}
+  #prompt{position:absolute;left:50%;bottom:150px;transform:translateX(-50%);font-size:11px;letter-spacing:.3em;
+    color:var(--bone);text-transform:uppercase;text-shadow:0 0 10px #000}
+  #cross{position:absolute;left:50%;top:50%;width:4px;height:4px;margin:-2px;border-radius:50%;background:rgba(216,212,200,.8)}
+  #bars{position:absolute;left:50%;bottom:96px;transform:translateX(-50%);width:240px}
+  #bars .row{display:flex;align-items:center;gap:8px;margin-top:5px}
+  #bars .lbl{font-size:8px;letter-spacing:.3em;color:var(--dim);width:52px;text-transform:uppercase;text-align:right}
+  #bars .bar{flex:1;height:6px;border:1px solid rgba(216,212,200,.28);background:rgba(2,3,8,.5);position:relative}
+  #stamFill{position:absolute;inset:1px auto 1px 1px;width:100%;background:#8a9a7a}
+  #micFill{position:absolute;inset:1px auto 1px 1px;width:0%;background:#6f8f6a}
+  #micThr{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--red);left:25%}
+  #mic.hot #micFill{background:var(--red)}
+  #mic.off + .row .lbl{color:var(--red)}
+  #rocksHud{position:absolute;right:16px;bottom:20px;font-size:10px;letter-spacing:.22em;color:var(--dim);text-transform:uppercase;text-align:right}
   #rocksHud i{display:inline-block;width:9px;height:9px;border:1px solid var(--dim);transform:rotate(45deg);margin-left:7px}
   #rocksHud i.full{background:var(--bone);border-color:var(--bone)}
-  #mini{position:absolute;top:16px;right:18px;border:1px solid rgba(216,212,200,.22);background:rgba(2,3,8,.6)}
-  #banner{position:fixed;top:24%;left:0;right:0;text-align:center;z-index:30;pointer-events:none;
-    font-family:var(--disp);font-size:clamp(20px,3.6vw,40px);letter-spacing:.4em;text-transform:uppercase;
-    color:var(--bone);text-shadow:0 0 30px rgba(0,0,0,.9);opacity:0;transition:opacity .5s}
+  #fsInd{position:absolute;right:16px;bottom:64px;font-size:9px;letter-spacing:.3em;color:var(--dim);text-transform:uppercase}
+  #fsInd.on{color:var(--amber)}
+  #mini{position:absolute;top:14px;right:16px;border:1px solid rgba(216,212,200,.22);background:rgba(2,3,8,.6)}
+  #banner{position:fixed;top:22%;left:0;right:0;text-align:center;z-index:30;pointer-events:none;font-family:var(--disp);
+    font-size:clamp(20px,3.6vw,40px);letter-spacing:.4em;text-transform:uppercase;color:var(--bone);
+    text-shadow:0 0 30px rgba(0,0,0,.9);opacity:0;transition:opacity .5s}
   #banner.show{opacity:1} #banner.red{color:var(--red)}
   #pulse{position:fixed;inset:0;pointer-events:none;z-index:15;opacity:0;
     background:radial-gradient(ellipse at center,transparent 55%,rgba(150,20,26,.55) 100%)}
+  #lock{position:fixed;inset:0;z-index:25;display:flex;align-items:center;justify-content:center;
+    font-family:var(--disp);letter-spacing:.4em;text-transform:uppercase;font-size:18px;color:var(--dim);
+    background:rgba(2,3,8,.4);cursor:pointer}
   #end h2{font-family:var(--disp);font-size:clamp(30px,6vw,64px);letter-spacing:.24em;text-transform:uppercase}
   #end .sub{font-family:var(--mono);font-size:11px;letter-spacing:.3em;color:var(--dim);text-transform:uppercase}
   #end h2.red{color:var(--red)} #end h2.amber{color:var(--amber)}
@@ -100,34 +98,38 @@
 
 <div id="hud" class="hidden">
   <div id="obj"></div>
-  <canvas id="mini" width="140" height="140"></canvas>
+  <div id="clock" class="night"></div>
+  <canvas id="mini" width="150" height="150"></canvas>
   <div id="log"></div>
   <div id="prompt"></div>
-  <div id="mic">
-    <div class="lbl"><span>YOUR MICROPHONE IS LIVE</span><em></em></div>
-    <div class="bar"><div id="micFill"></div><div id="micThr"></div></div>
+  <div id="cross"></div>
+  <div id="bars">
+    <div class="row"><div class="lbl">stamina</div><div class="bar"><div id="stamFill"></div></div></div>
+    <div class="row" id="mic"><div class="lbl">mic · live</div><div class="bar"><div id="micFill"></div><div id="micThr"></div></div></div>
   </div>
-  <div id="rocksHud">stones <i></i><i></i><i></i><br><span style="opacity:.6">click to throw · decoy</span></div>
+  <div id="fsInd">[F] FLASHLIGHT</div>
+  <div id="rocksHud">stones <i></i><i></i><i></i><br><span style="opacity:.6">click — throw decoy</span></div>
 </div>
 <div id="pulse"></div>
 <div id="banner"></div>
+<div id="lock" class="hidden">CLICK TO TAKE CONTROL</div>
 
 <div id="title" class="screen">
   <div id="rings"><i></i><i></i><i></i><i></i></div>
   <div class="eyebrow">co-op survival · 1–8 per room · <b>● live audio feed</b></div>
   <h1>A Quiet<br>Place</h1>
   <div class="tag">It cannot see you. <em>It can hear everything.</em><br>
-    Your real microphone is wired straight into the dark — every cough, every word, every chair scrape.</div>
+    Your real microphone is wired into the dark. Friends near you are heard in 3D — whisper.</div>
   <div class="joinrow">
     <input type="text" id="name" maxlength="14" placeholder="YOUR NAME" autocomplete="off">
     <input type="text" id="room" maxlength="6" placeholder="ROOM CODE · BLANK = NEW" autocomplete="off">
   </div>
   <button id="begin">Step into the dark</button>
   <div class="rules">
-    <div><b>WASD</b> move<br><b>SHIFT</b> run — loud<br><b>C</b> sneak — silent</div>
-    <div><b>E</b> doors · fuses · revive<br><b>CLICK</b> throw stone — decoy<br><b>HEADPHONES</b> strongly advised</div>
-    <div class="warn">find <b>5 fuses</b>, power the radio tower.<br>doors creak. running is a death wish.<br><b>silence is survival.</b></div>
-    <div><b>ROOMS</b> — blank code starts a new night.<br>share your link <b>?room=CODE</b><br>so friends join <b>your</b> dark.</div>
+    <div><b>WASD</b> move · <b>MOUSE</b> look<br><b>SHIFT</b> sprint — loud<br><b>C</b> crouch — silent</div>
+    <div><b>F</b> flashlight · <b>E</b> use/revive<br><b>CLICK</b> throw stone — decoy<br><b>HEADPHONES</b> required</div>
+    <div class="warn"><b>NIGHT 5:00</b> — fuses surface, it hunts.<br><b>DAY 10:00</b> — it sleeps. move. insert.<br><b>SILENCE IS SURVIVAL.</b></div>
+    <div><b>ROOMS</b> — blank code = new night.<br>share link <b>?room=CODE</b><br>voice fades with distance.</div>
   </div>
   <div class="foot">terrain · buildings · creature · sound — all generated in code, zero assets</div>
 </div>
@@ -145,6 +147,7 @@
   <div class="sub" id="endSub"></div>
 </div>
 
+<script src="https://unpkg.com/three@0.149.0/build/three.min.js"></script>
 <script src="/worldgen.js"></script>
 <script src="/game.js"></script>
 </body>
