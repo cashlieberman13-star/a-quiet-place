@@ -17,7 +17,7 @@ class Mic {
   }
   async enable() {
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      audio: true,
     });
     this.ctx = new (window.AudioContext || window.webkitAudioContext)();
     const src = this.ctx.createMediaStreamSource(stream);
