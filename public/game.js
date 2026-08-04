@@ -1498,5 +1498,104 @@ class Game {
       `<div class="o ${done >= this.need ? 'done' : ''}">Fuel cans to the truck — ${done}/${this.need}</div>`,
       this.phase === 'fueling' ? `<div class="o">Survive the fueling — ${this.fuelTimer}s</div>` : '',
       this.phase === 'extract' ? `<div class="o">Reach the truck</div>` : '',
-        `<div class="o" style="opacity:.6">Battery ${this.batt}%</div>`
-];
+      `<div class="o" style="opacity:.6">Battery ${this.batt}%</div>`
+    ];
+    
+    // Inject the rows into the objectives UI container
+    const objEl = $('#objectives');
+    if (objEl) objEl.innerHTML = rows.join('');
+  }
+}
+
+/* ==========================================================================
+   BOOTSTRAP ENGINE CORE — Main Loop State Orchestrator
+   ========================================================================== */
+class GameEngine {
+  constructor() {
+    this.mic = new Mic();
+    this.sfx = new Sfx();
+    this.renderer = new GameRenderer($('#gameCanvas'));
+    this.net = new NetworkLayer(this);
+    this.inputs = { up: false, down: false, left: false, right: false, crouch: false };
+    this.localId = null;
+    this.lastTime = performance.now();
+    this.initInputBindings();
+    this.net.connect();
+    this.wireUI();
+  }
+
+  wireUI() {
+    $('#btnCreate').onclick = () => { this.mic.enable().then(() => { this.sfx.init(); this.net.createRoom(); }); };
+    $('#btnJoin').onclick = () => {
+      const code = $('#txtCode').value;
+      if (!code) return alert("Missing Room Authentication String Token");
+      this.mic.enable().then(() => { this.sfx.init(); this.net.joinRoom(code); });
+    };
+  }
+
+  initInputBindings() {
+    const handleKey = (e, val) => {
+      const k = e.key.toLowerCase();
+      if (k === 'w' || k === 'arrowup') this.inputs.up = val;
+      if (k === 's' || k === 'arrowdown') this.inputs.down = val;
+      if (k === 'a' || k === 'arrowleft') this.inputs.left = val;
+      if (k === 'd' || k === 'arrowright') this.inputs.right = val;
+      if (e.key === 'Shift') this.inputs.crouch = val;
+    };
+    window.addEventListener('keydown', e => handleKey(e, true));
+    window.addEventListener('keyup', e => handleKey(e, false));
+  }
+
+  onConnected(code, playerId) {
+    this.localId = playerId;
+    this.sfx.blip(true);
+    $('#menuOverlay').style.display = 'none';
+    $('#hudOverlay').style.display = 'block';
+    $('#roomDisplay').innerText = code;
+    this.run();
+  }
+
+  onServerTick(state) {
+    this.renderer.updateEntities(state, this.localId);
+    
+    // Update Spatial Audio Listener Vectors inside WebAudio Engine Context
+    if (state.players && state.players[this.localId]) {
+      const localP = state.players[this.localId];
+      if (this.sfx.listener) {
+        if (this.sfx.listener.positionX) {
+          this.sfx.listener.positionX.value = localP.x;
+          this.sfx.listener.positionY.value = localP.y;
+          this.sfx.listener.positionZ.value = localP.z;
+        } else {
+          this.sfx.listener.setPosition(localP.x, localP.y, localP.z);
+        }
+      }
+
+      // Procedural Sonar emission on microphone spike thresholds
+      const micRadius = this.mic.sample();
+      if (this.mic.emission() > 0.4 && Math.random() < 0.15) {
+        this.renderer.triggerSonar(localP.x, localP.y, localP.z, micRadius * 0.5);
+        this.sfx.thud(localP.x, localP.y, localP.z, false);
+      }
+    }
+  }
+
+  run() {
+    const loop = (now) => {
+      const dt = (now - this.lastTime) / 1000;
+      this.lastTime = now;
+
+      const currentMicRadius = this.mic.sample();
+      const meterEl = $('#dbMeter');
+      if (meterEl) meterEl.style.width = `${Math.min(100, currentMicRadius)}%`;
+      
+      this.net.sendUpdate(this.inputs, currentMicRadius);
+      this.renderer.render(dt);
+      requestAnimationFrame(loop);
+    };
+    requestAnimationFrame(loop);
+  }
+}
+
+// Instantiate engine when DOM content mapping locks cleanly
+window.addEventListener('DOMContentLoaded', () => { new GameEngine(); });
