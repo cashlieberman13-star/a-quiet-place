@@ -121,7 +121,7 @@
       <div><label>Room code</label><input id="fRoom" type="text" value="QUIET" maxlength="8"></div>
     </div>
 
-    <div class="calib">
+        <div class="calib">
       <div id="micState">Microphone not enabled.</div>
       <div class="bar"><i id="calBar"></i></div>
       <label>Noise threshold — <span id="thrVal">28</span></label>
@@ -129,6 +129,9 @@
       <label>Input gain — <span id="gainVal">1.0</span>×</label>
       <input id="fGain" type="range" min="0.2" max="4" step="0.1" value="1">
     </div>
+    <button class="mini" id="btnMic">Enable microphone</button>
+    <button id="btnPlay" disabled>Enter the valley</button>
+
     <button class="mini" id="btnMic">Enable microphone</button>
     <button id="btnPlay" disabled>Enter the valley</button>
 
@@ -150,3 +153,4 @@
 <script type="module" src="./game.js"></script>
 </body>
 </html>
+
