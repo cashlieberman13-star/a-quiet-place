@@ -1,32 +1,31 @@
 'use strict';
-/* A QUIET PLACE — client. Rendering, procedural audio, real-mic threat vector. */
+/* A QUIET PLACE — client. Rendering, procedural audio, real-mic threat vector, rooms. */
 const WG = window.WorldGen;
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 const lerp = (a, b, t) => a + (b - a) * t;
 
-/* ============================ constants ============================ */
-const INTERP = 110;                       // ms behind server
+const INTERP = 110;
 const PR = WG.PR;
 const cv = $('cv'), ctx = cv.getContext('2d');
 const dark = document.createElement('canvas'), dctx = dark.getContext('2d');
 let W = 0, H = 0, DPR = 1;
 
-/* ============================ state ============================ */
+/* ---------------- state ---------------- */
 const NET = { ws: null, id: -1, open: false, wasInGame: false };
-const roster = new Map();                 // id -> {name,color}
+const roster = new Map();
 let WORLD = null, DECOR = [], terrainPat = null, grainPat = [], grainI = 0, vign = null;
 let snaps = [], doorsOpen = [], solidsCache = null, solidsKey = '';
 let phase = 'title', phaseT = 0, graceT = 0, genN = 0, genTotal = 5;
-let myColor = '#c9b27c', myName = '', night = 1, wasDead = false, prevHunt = false;
+let myColor = '#c9b27c', myName = '', ROOM = '', joinRoom = '', night = 1, wasDead = false, prevHunt = false;
 let cam = { x: WG.SIZE / 2, y: WG.SIZE / 2 }, shake = 0, redPulse = 0;
-let mouse = { x: 0, y: 0 }, keys = {}, connLost = false;
+let mouse = { x: 0, y: 0 }, keys = {};
 const ripples = [], flashes = [], pebbles = [], dusts = [], ash = [];
 let creatureDist = 1e9;
-const local = { x: 0, y: 0, init: false, stepAcc: 0, stepT: 0 };
+const local = { x: 0, y: 0, init: false, stepAcc: 0 };
 let view = null;
 
-/* ============================ audio engine ============================ */
+/* ---------------- audio ---------------- */
 let ac = null, master = null, noiseBuf = null, growlGain = null;
 function audioInit() {
   if (ac) return;
@@ -40,7 +39,6 @@ function audioInit() {
   startAmbience();
 }
 function startAmbience() {
-  // wind — filtered noise, slow LFO
   const src = ac.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
   const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 300; bp.Q.value = 0.5;
   const g = ac.createGain(); g.gain.value = 0.045;
@@ -52,13 +50,11 @@ function startAmbience() {
   lfo2.connect(lg2).connect(g.gain);
   src.connect(bp).connect(g).connect(master);
   src.start(); lfo.start(); lfo2.start();
-  // sub drone
   [48, 48.8].forEach(f => {
     const o = ac.createOscillator(); o.type = 'triangle'; o.frequency.value = f;
     const og = ac.createGain(); og.gain.value = 0.016;
     o.connect(og).connect(master); o.start();
   });
-  // growl (gated by proximity during hunts)
   const o = ac.createOscillator(); o.type = 'sawtooth'; o.frequency.value = 46;
   const ws2 = ac.createWaveShaper(); const curve = new Float32Array(256);
   for (let i = 0; i < 256; i++) curve[i] = Math.tanh((i / 128 - 1) * 3);
@@ -77,7 +73,7 @@ function noiseHit(t, dur, freq, q, vol, x, y) {
   const s = ac.createBufferSource(); s.buffer = noiseBuf; s.playbackRate.value = 0.9 + Math.random() * 0.2;
   const f = ac.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = freq; f.Q.value = q;
   const g = ac.createGain();
-  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.012);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(Math.max(0.001, vol), t + 0.012);
   g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
   s.connect(f).connect(g); pan(g, x, y); s.start(t); s.stop(t + dur + 0.05);
 }
@@ -86,23 +82,24 @@ function tone(t, type, f0, f1, dur, vol, x, y) {
   o.frequency.setValueAtTime(f0, t);
   if (f1) o.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t + dur);
   const g = ac.createGain();
-  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.02);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(Math.max(0.001, vol), t + 0.02);
   g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-  o.connect(g); pan(g, x, y); o.start(t); o.stop(t + dur + 0.05); return o;
+  o.connect(g); pan(g, x, y); o.start(t); o.stop(t + dur + 0.05);
+  return o;
 }
 const sfx = {
   step(v, x, y) { const t = ac.currentTime; noiseHit(t, 0.08, 260 + Math.random() * 300, 1.4, v, x, y); tone(t, 'sine', 88, 60, 0.05, v * 0.5, x, y); },
   door(v, x, y) { const t = ac.currentTime; const o = tone(t, 'sawtooth', 96, 68, 0.55, v * 0.35, x, y);
     const lfo = ac.createOscillator(); lfo.frequency.value = 11; const lg = ac.createGain(); lg.gain.value = v * 0.2;
-    lfo.connect(lg).connect(o.frequency ? o.frequency : o); lfo.start(t); lfo.stop(t + 0.6); },
+    lfo.connect(lg).connect(o.frequency); lfo.start(t); lfo.stop(t + 0.6); },
   breach(v, x, y) { const t = ac.currentTime; noiseHit(t, 0.4, 240, 0.7, v, x, y); tone(t, 'sine', 90, 34, 0.35, v, x, y); },
   shriek(v, x, y) {
     const t = ac.currentTime;
     const dl = ac.createDelay(); dl.delayTime.value = 0.11; const fb = ac.createGain(); fb.gain.value = 0.3;
     dl.connect(fb).connect(dl); const out = ac.createGain(); out.gain.value = 1; dl.connect(out); pan(out, x, y);
-    [[950, 240, 'sawtooth'], [1400, 310, 'square']].forEach(([f0, f1, ty]) => {
-      const o = ac.createOscillator(); o.type = ty;
-      o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + 0.85);
+    [[950, 240, 'sawtooth'], [1400, 310, 'square']].forEach(pr => {
+      const o = ac.createOscillator(); o.type = pr[2];
+      o.frequency.setValueAtTime(pr[0], t); o.frequency.exponentialRampToValueAtTime(pr[1], t + 0.85);
       const g = ac.createGain(); g.gain.setValueAtTime(0.0001, t);
       g.gain.exponentialRampToValueAtTime(v * 0.28, t + 0.03); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.95);
       o.connect(g); g.connect(master); g.connect(dl); o.start(t); o.stop(t + 1);
@@ -118,22 +115,24 @@ const sfx = {
   thud(v, x, y) { const t = ac.currentTime; noiseHit(t, 0.1, 500, 1, v * 0.5, x, y); tone(t, 'sine', 140, 70, 0.09, v * 0.4, x, y); },
   win(v) { const t = ac.currentTime; [220, 330, 440, 660].forEach((f, i) => tone(t + i * 0.16, 'triangle', f, 0, 0.8, v * 0.25, WG.SIZE / 2, WG.SIZE / 2)); },
   lose(v) { const t = ac.currentTime; tone(t, 'sawtooth', 110, 40, 2.4, v * 0.3, WG.SIZE / 2, WG.SIZE / 2); tone(t, 'sawtooth', 113, 42, 2.4, v * 0.3, WG.SIZE / 2, WG.SIZE / 2); },
-  click(v, x, y) { const t = ac.currentTime; noiseHit(t, 0.03, 2600 + Math.random() * 900, 6, v * 0.4, x, y); }
+  click(v, x, y) { noiseHit(ac.currentTime, 0.03, 2600 + Math.random() * 900, 6, v * 0.4, x, y); },
+  tinnitus() { tone(ac.currentTime, 'sine', 3900, 3600, 2.2, 0.05, local.x, local.y); }
 };
 let hbNext = 0;
 function heartbeat(v) {
   const t = ac.currentTime;
-  [[0, v], [0.17, v * 0.75]].forEach(([off, vv]) => {
+  [[0, v], [0.17, v * 0.75]].forEach(b => {
     const o = ac.createOscillator(); o.type = 'sine';
-    o.frequency.setValueAtTime(58, t + off); o.frequency.exponentialRampToValueAtTime(34, t + off + 0.12);
-    const g = ac.createGain(); g.gain.setValueAtTime(0.0001, t + off);
-    g.gain.exponentialRampToValueAtTime(vv, t + off + 0.012); g.gain.exponentialRampToValueAtTime(0.0001, t + off + 0.17);
-    o.connect(g).connect(master); o.start(t + off); o.stop(t + off + 0.22);
+    o.frequency.setValueAtTime(58, t + b[0]); o.frequency.exponentialRampToValueAtTime(34, t + b[0] + 0.12);
+    const g = ac.createGain(); g.gain.setValueAtTime(0.0001, t + b[0]);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.001, b[1]), t + b[0] + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + b[0] + 0.17);
+    o.connect(g).connect(master); o.start(t + b[0]); o.stop(t + b[0] + 0.22);
   });
 }
 
-/* ============================ microphone ============================ */
-const MIC = { on: false, analyser: null, data: null, lvl: 0, floor: 0.004, thr: 0.012, calib: false, calibT: 0, samples: [], lastSend: 0 };
+/* ---------------- microphone ---------------- */
+const MIC = { on: false, analyser: null, data: null, lvl: 0, thr: 0.012, calib: false, calibT: 0, samples: [], lastSend: 0 };
 async function micStart() {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: false, autoGainControl: false } });
@@ -144,7 +143,7 @@ async function micStart() {
     MIC.on = true; MIC.calib = true; MIC.calibT = 0; MIC.samples = [];
     $('mcStatus').textContent = 'LISTENING FOR ROOM TONE — STAY SILENT';
   } catch (e) {
-    MIC.on = false;
+    MIC.on = false; MIC.calib = false;
     $('mcStatus').textContent = 'MICROPHONE DENIED — YOU WILL PLAY MUTE';
     $('skipMic').textContent = 'continue without a mic';
   }
@@ -161,8 +160,8 @@ function micTick(dt) {
     $('mcFill').style.width = clamp(rms / 0.05 * 100, 0, 100) + '%';
     if (MIC.calibT > 1.6) {
       MIC.samples.sort((a, b) => a - b);
-      MIC.floor = MIC.samples[Math.floor(MIC.samples.length * 0.9)] || 0.003;
-      MIC.thr = MIC.floor * 1.9 + 0.004;
+      const floor = MIC.samples[Math.floor(MIC.samples.length * 0.9)] || 0.003;
+      MIC.thr = floor * 1.9 + 0.004;
       MIC.calib = false;
       $('mcStatus').textContent = 'ROOM TONE CAPTURED — CROSS THE RED LINE AND IT HEARS YOU';
       $('skipMic').textContent = 'begin';
@@ -174,34 +173,34 @@ function micSend() {
   if (MIC.lvl > MIC.thr) {
     const v = clamp((MIC.lvl - MIC.thr) / 0.085, 0.05, 1);
     const now = performance.now();
-    if (now - MIC.lastSend > 110) {
-      MIC.lastSend = now;
-      NET.ws.send(JSON.stringify({ t: 'noise', v }));
-    }
+    if (now - MIC.lastSend > 110) { MIC.lastSend = now; NET.ws.send(JSON.stringify({ t: 'noise', v })); }
   }
 }
 
-/* ============================ networking ============================ */
+/* ---------------- networking ---------------- */
 function connect() {
+  if (NET.ws && (NET.ws.readyState === 0 || NET.ws.readyState === 1)) return;
   const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
   NET.ws = new WebSocket(url);
-  NET.ws.onopen = () => { NET.open = true; NET.ws.send(JSON.stringify({ t: 'join', name: myName })); };
+  NET.ws.onopen = () => { NET.open = true; NET.ws.send(JSON.stringify({ t: 'join', name: myName, room: joinRoom })); };
   NET.ws.onclose = () => {
     NET.open = false;
-    if (NET.wasInGame) { connLost = true; banner('SIGNAL LOST — RECONNECTING', true); setTimeout(connect, 1600); }
+    if (NET.wasInGame) { banner('SIGNAL LOST — RECONNECTING', true); setTimeout(connect, 1600); }
   };
   NET.ws.onmessage = e => onMsg(JSON.parse(e.data));
 }
 function onMsg(m) {
   switch (m.t) {
-    case 'full': banner('THE DARK IS FULL — 8 SURVIVORS MAX', true); NET.ws.close(); break;
+    case 'full': banner('THAT ROOM IS FULL — 8 SURVIVORS MAX', true); NET.ws.close(); break;
     case 'welcome':
-      NET.id = m.id; myColor = m.color;
+      NET.id = m.id; myColor = m.color; ROOM = m.room; joinRoom = m.room;
       roster.clear(); m.roster.forEach(r => roster.set(r.id, r));
-      initWorld(m.world); connLost = false;
+      try { history.replaceState(null, '', '?room=' + ROOM); } catch (e) {}
+      initWorld(m.world);
       $('title').classList.add('hidden'); $('miccheck').classList.add('hidden');
       $('hud').classList.remove('hidden'); NET.wasInGame = true;
-      banner('NIGHT ' + night + ' — FIND ' + m.world.fuses.length + ' FUSES · MAKE NO SOUND');
+      banner('ROOM ' + ROOM + ' — NIGHT ' + night + ' — MAKE NO SOUND');
+      log('ROOM ' + ROOM + ' — SHARE YOUR LINK TO INVITE', 'good');
       break;
     case 'reset':
       night++; initWorld(m.world); snaps = [];
@@ -219,24 +218,23 @@ function onState(d) {
   const key = d.dn.join('');
   if (key !== solidsKey) { doorsOpen = d.dn; solidsKey = key; rebuildSolids(); }
   handleEvents(d.ev);
-  // correct local prediction toward authoritative pos
   const rawMe = d.p.find(q => q.id === NET.id);
   if (rawMe && local.init) {
     const err = Math.hypot(rawMe.x - local.x, rawMe.y - local.y);
     if (err > 70) { local.x = rawMe.x; local.y = rawMe.y; }
     else { local.x += (rawMe.x - local.x) * 0.25; local.y += (rawMe.y - local.y) * 0.25; }
   }
-  if (rawMe && rawMe.s === 0 && wasDead) wasDead = false;
+  if (rawMe && rawMe.s === 0) wasDead = false;
 }
 
-/* ============================ world build ============================ */
-function clientSolids() { return solidsCache || (rebuildSolids(), solidsCache); }
+/* ---------------- world ---------------- */
 function rebuildSolids() {
   if (!WORLD) return;
   const arr = WORLD.walls.slice();
   WORLD.doors.forEach((dr, i) => { if (!doorsOpen[i]) arr.push(dr); });
   solidsCache = arr;
 }
+function clientSolids() { return solidsCache || (rebuildSolids(), solidsCache); }
 function initWorld(world) {
   WORLD = world; doorsOpen = world.doors.map(() => 0); solidsKey = '';
   rebuildSolids(); buildTerrain(); buildDecor();
@@ -260,13 +258,13 @@ function buildTerrain() {
   for (let i = 0; i < 7; i++) { g.beginPath(); g.arc(rnd() * 384, rnd() * 384, 12 + rnd() * 26, 0, 7); g.fill(); }
   g.globalAlpha = 1;
   terrainPat = ctx.createPattern(t, 'repeat');
-  // grain
   grainPat = [];
   for (let n = 0; n < 3; n++) {
     const gc = document.createElement('canvas'); gc.width = gc.height = 160;
     const gg = gc.getContext('2d'), id = gg.createImageData(160, 160);
     for (let i = 0; i < id.data.length; i += 4) {
-      const v = Math.random() * 255; id.data[i] = id.data[i + 1] = id.data[i + 2] = v;
+      const v = Math.random() * 255;
+      id.data[i] = id.data[i + 1] = id.data[i + 2] = v;
       id.data[i + 3] = Math.random() < 0.5 ? 14 : 0;
     }
     gg.putImageData(id, 0, 0);
@@ -285,7 +283,7 @@ function buildDecor() {
   }
 }
 
-/* ============================ events → sound & visuals ============================ */
+/* ---------------- events ---------------- */
 function mePos() { return (view && view.me) ? view.me : { x: local.x, y: local.y }; }
 function audVol(x, y, range) {
   const m = mePos(); const d = Math.hypot(x - m.x, y - m.y);
@@ -301,9 +299,7 @@ function handleEvents(evs) {
         if (e.i >= 0.4) flashes.push({ x: e.x, y: e.y, r: 70 + e.i * 90, until: performance.now() + 450 });
         if (e.a === 'land') { dusts.push({ x: e.x, y: e.y, t: performance.now() }); if (v > 0) sfx.thud(v, e.x, e.y); }
         break;
-      case 'step':
-        if (e.id !== NET.id && v > 0) sfx.step(v * 0.5, e.x, e.y);
-        break;
+      case 'step': if (e.id !== NET.id && v > 0) sfx.step(v * 0.5, e.x, e.y); break;
       case 'door': if (v > 0) sfx.door(v, e.x, e.y); break;
       case 'breach': if (v > 0) sfx.breach(v, e.x, e.y); shake = Math.max(shake, 10 * v); log('IT BROKE A DOOR DOWN', 'bad'); break;
       case 'shriek': sfx.shriek(0.3 + v * 0.7, e.x, e.y); shake = Math.max(shake, 14); break;
@@ -326,9 +322,8 @@ function handleEvents(evs) {
     }
   }
 }
-sfx.tinnitus = function () { const t = ac.currentTime; tone(t, 'sine', 3900, 3600, 2.2, 0.05, local.x, local.y); };
 
-/* ============================ input ============================ */
+/* ---------------- input ---------------- */
 addEventListener('keydown', e => {
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
   keys[e.code] = true; sendInput();
@@ -336,26 +331,25 @@ addEventListener('keydown', e => {
 addEventListener('keyup', e => { keys[e.code] = false; sendInput(); });
 addEventListener('blur', () => { keys = {}; sendInput(); });
 addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
-addEventListener('mousedown', e => {
-  if (!NET.open || phase !== 'play') return;
+addEventListener('mousedown', () => {
+  if (!NET.open || phase !== 'play' || !view || !view.me || view.me.s !== 0) return;
   const m = worldMouse();
   const dx = m.x - local.x, dy = m.y - local.y, len = Math.hypot(dx, dy) || 1;
   NET.ws.send(JSON.stringify({ t: 'throw', dx: dx / len, dy: dy / len }));
 });
 cv.addEventListener('contextmenu', e => e.preventDefault());
 function worldMouse() { return { x: mouse.x - W / 2 + cam.x, y: mouse.y - H / 2 + cam.y }; }
-let lastInput = 0;
 function inputState() {
   return {
     u: !!(keys.KeyW || keys.ArrowUp), d: !!(keys.KeyS || keys.ArrowDown),
     l: !!(keys.KeyA || keys.ArrowLeft), r: !!(keys.KeyD || keys.ArrowRight),
-    run: !!keys.ShiftLeft || !!keys.ShiftRight, sneak: !!keys.KeyC, e: !!keys.KeyE
+    run: !!(keys.ShiftLeft || keys.ShiftRight), sneak: !!keys.KeyC, e: !!keys.KeyE
   };
 }
-function sendInput() { if (NET.open) NET.ws.send(JSON.stringify(Object.assign({ t: 'input' }, inputState()))); }
-setInterval(() => { if (NET.open) sendInput(); }, 250);
+function sendInput() { if (NET.open && NET.ws.readyState === 1) NET.ws.send(JSON.stringify(Object.assign({ t: 'input' }, inputState()))); }
+setInterval(sendInput, 250);
 
-/* ============================ client prediction ============================ */
+/* ---------------- prediction ---------------- */
 function predict(dt) {
   if (!view || !view.me || view.me.s === 2) return;
   if (!local.init) { local.x = view.me.x; local.y = view.me.y; local.init = true; }
@@ -369,7 +363,6 @@ function predict(dt) {
   if (view.me.f && gait === 'run') spd = 170;
   const res = WG.resolveCircle(local.x + vx * spd * dt, local.y + vy * spd * dt, PR, clientSolids(), WORLD.trees, WG.SIZE);
   local.x = res.x; local.y = res.y;
-  // local footsteps (self only — immediate feedback)
   local.stepAcc += Math.hypot(vx * spd * dt, vy * spd * dt);
   const stride = gait === 'run' ? 46 : gait === 'sneak' ? 30 : 36;
   if (local.stepAcc >= stride) {
@@ -378,28 +371,28 @@ function predict(dt) {
   }
 }
 
-/* ============================ snapshot interpolation ============================ */
+/* ---------------- interpolation ---------------- */
 function buildView() {
   if (!snaps.length) return null;
   const at = performance.now() - INTERP;
   let a = snaps[0], b = null;
   for (let i = snaps.length - 1; i >= 0; i--) if (snaps[i].t <= at) { a = snaps[i]; b = snaps[i + 1] || null; break; }
   const f = b ? clamp((at - a.t) / (b.t - a.t || 1), 0, 1) : 0;
-  const lp = (x0, y0, x1, y1) => ({ x: lerp(x0, x1, f), y: lerp(y0, y1, f) });
   const ps = a.d.p.map(pa => {
     const pb = b && b.d.p.find(q => q.id === pa.id);
-    const pos = pb ? lp(pa.x, pa.y, pb.x, pb.y) : { x: pa.x, y: pa.y };
-    return Object.assign({}, pa, pos, pb ? { s: pb.s, f: pb.f, r: pb.r, rv: pb.rv, g: pb.g, d: pb.d } : {});
+    const x = pb ? lerp(pa.x, pb.x, f) : pa.x, y = pb ? lerp(pa.y, pb.y, f) : pa.y;
+    return Object.assign({}, pa, { x, y }, pb ? { s: pb.s, f: pb.f, r: pb.r, rv: pb.rv, g: pb.g, d: pb.d } : {});
   });
   const c0 = a.d.c, c1 = b ? b.d.c : c0;
-  const c = Object.assign({}, c0, lp(c0.x, c0.y, c1.x, c1.y), { s: c1.s, tg: c1.tg, d: c1.d });
+  const c = Object.assign({}, c0, { x: lerp(c0.x, c1.x, f), y: lerp(c0.y, c1.y, f), s: c1.s, tg: c1.tg, d: c1.d });
   return { p: ps, c, me: ps.find(q => q.id === NET.id) || null };
 }
 
-/* ============================ HUD helpers ============================ */
+/* ---------------- HUD ---------------- */
+let bannerT = 0;
 function banner(txt, red) {
   const b = $('banner'); b.textContent = txt; b.className = 'show' + (red ? ' red' : '');
-  clearTimeout(banner._t); banner._t = setTimeout(() => b.className = '', 3400);
+  clearTimeout(bannerT); bannerT = setTimeout(() => { b.className = ''; }, 3400);
 }
 function log(txt, cls) {
   const el = document.createElement('div'); el.textContent = txt;
@@ -408,11 +401,10 @@ function log(txt, cls) {
   while (l.children.length > 6) l.lastChild.remove();
 }
 function updateHUD() {
-  const obj = $('obj');
-  obj.innerHTML = 'OBJECTIVE — FUSES <b>' + genN + '/' + genTotal + '</b> · POWER THE RADIO TOWER' +
-    (graceT > 0 ? '<br><span class="wake">IT WAKES IN ' + graceT + 's</span>' : '') +
-    '<br>SURVIVORS <b>' + (view ? view.p.filter(q => q.s !== 2).length : 0) + '</b>';
-  // mic meter
+  $('obj').innerHTML =
+    '<span class="room">ROOM ' + ROOM + '</span> · SURVIVORS <b>' + view.p.filter(q => q.s !== 2).length + '</b><br>' +
+    'OBJECTIVE — FUSES <b>' + genN + '/' + genTotal + '</b> · POWER THE RADIO TOWER' +
+    (graceT > 0 ? '<br><span class="wake">IT WAKES IN ' + graceT + 's</span>' : '');
   const mic = $('mic');
   if (MIC.on) {
     mic.classList.toggle('hot', MIC.lvl > MIC.thr);
@@ -424,14 +416,10 @@ function updateHUD() {
     mic.querySelector('.lbl em').textContent = 'MIC OFFLINE — YOU ARE SILENT';
     $('micFill').style.width = '0%';
   }
-  // rocks
-  const me = view && view.me;
-  const dots = document.querySelectorAll('#rocksHud i');
-  dots.forEach((d, i) => d.className = me && i < me.r ? 'full' : '');
-  // prompt
+  const me = view.me;
+  document.querySelectorAll('#rocksHud i').forEach((d, i) => { d.className = me && i < me.r ? 'full' : ''; });
   let prompt = '';
   if (me && me.s !== 2 && WORLD) {
-    for (const [i, f] of snaps.length ? [] : []) {}
     const last = snaps[snaps.length - 1];
     if (last) {
       for (const f of last.d.fu) if (f[1] !== 'h' && f[1] !== 'i' && Math.hypot(f[1] - local.x, f[2] - local.y) < 36) { prompt = 'E — TAKE THE FUSE'; break; }
@@ -445,17 +433,16 @@ function updateHUD() {
     }
   }
   $('prompt').textContent = prompt;
-  // end screen
   const end = $('end');
   if (phase === 'won' || phase === 'lost') {
     end.classList.remove('hidden');
     $('endTitle').textContent = phase === 'won' ? 'THE TOWER SINGS — RESCUED' : 'EVERYONE IS DEAD';
     $('endTitle').className = phase === 'won' ? 'amber' : 'red';
-    $('endSub').textContent = 'the world resets in ' + phaseT + 's';
+    $('endSub').textContent = 'room ' + ROOM + ' · world resets in ' + phaseT + 's';
   } else end.classList.add('hidden');
 }
 
-/* ============================ rendering ============================ */
+/* ---------------- rendering ---------------- */
 function resize() {
   DPR = Math.min(devicePixelRatio || 1, 1.5);
   W = innerWidth; H = innerHeight;
@@ -481,7 +468,6 @@ function drawWorldBase(t) {
     g.addColorStop(0, 'rgba(34,30,24,0.85)'); g.addColorStop(1, 'rgba(34,30,24,0)');
     ctx.fillStyle = g; ctx.beginPath(); ctx.arc(pl.x, pl.y, pl.r + 40, 0, 7); ctx.fill();
   }
-  // decor
   for (const d of DECOR) if (inView(d.x, d.y, 20)) {
     ctx.save(); ctx.translate(d.x, d.y); ctx.rotate(d.a);
     if (d.k === 'stone') { ctx.fillStyle = '#26292d'; ctx.beginPath(); ctx.ellipse(0, 0, 5 * d.s, 3.6 * d.s, 0, 0, 7); ctx.fill(); }
@@ -489,7 +475,6 @@ function drawWorldBase(t) {
       for (let i = -1; i <= 1; i++) { ctx.moveTo(0, 0); ctx.lineTo(i * 3 * d.s, -7 * d.s); } ctx.stroke(); }
     ctx.restore();
   }
-  // trees
   for (const tr of WORLD.trees) if (inView(tr.x, tr.y, 60)) {
     ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.beginPath(); ctx.ellipse(tr.x + 4, tr.y + 5, tr.cr * 0.9, tr.cr * 0.5, 0, 0, 7); ctx.fill();
     ctx.fillStyle = '#1c1610'; ctx.beginPath(); ctx.arc(tr.x, tr.y, tr.r, 0, 7); ctx.fill();
@@ -498,8 +483,8 @@ function drawWorldBase(t) {
   }
 }
 function drawBuildings() {
+  const T = WG.WALL_T;
   for (const b of WORLD.buildings) if (inView(b.x + b.w / 2, b.y + b.h / 2, Math.max(b.w, b.h))) {
-    const T = WG.WALL_T;
     ctx.fillStyle = '#161310'; ctx.fillRect(b.x + T, b.y + T, b.w - 2 * T, b.h - 2 * T);
     ctx.strokeStyle = 'rgba(255,240,200,0.035)'; ctx.lineWidth = 1;
     for (let x = b.x + T + 14; x < b.x + b.w - T; x += 18) {
@@ -549,7 +534,7 @@ function drawFuses(t) {
   for (const f of last.d.fu) {
     if (f[1] === 'h' || f[1] === 'i' || !inView(f[1], f[2], 30)) continue;
     const p = 0.6 + Math.sin(t * 3 + f[0]) * 0.4;
-    ctx.fillStyle = 'rgba(232,163,61,' + (0.12 * p) + ')'; ctx.beginPath(); ctx.arc(f[1], f[2], 14, 0, 7); ctx.fill();
+    ctx.fillStyle = 'rgba(232,163,61,' + (0.12 * p).toFixed(3) + ')'; ctx.beginPath(); ctx.arc(f[1], f[2], 14, 0, 7); ctx.fill();
     ctx.fillStyle = '#ffbf5e'; ctx.fillRect(f[1] - 6, f[2] - 3.5, 12, 7);
     ctx.fillStyle = '#8a6420'; ctx.fillRect(f[1] - 8, f[2] - 1.5, 2, 3); ctx.fillRect(f[1] + 6, f[2] - 1.5, 2, 3);
   }
@@ -560,20 +545,20 @@ function drawPlayer(p, t, isMe) {
   const r = roster.get(p.id), col = isMe ? myColor : (r ? r.color : '#999');
   ctx.save(); ctx.translate(x, y);
   ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.beginPath(); ctx.ellipse(2, 4, 9, 5, 0, 0, 7); ctx.fill();
-  if (p.s === 1) { // downed
-    ctx.rotate(p.d + Math.PI / 2);
+  if (p.s === 1) {
+    ctx.save(); ctx.rotate(p.d + Math.PI / 2);
     ctx.fillStyle = col; ctx.beginPath(); ctx.ellipse(0, 0, 11, 6, 0, 0, 7); ctx.fill();
     ctx.fillStyle = '#d8c9a8'; ctx.beginPath(); ctx.arc(0, -10, 4, 0, 7); ctx.fill();
-    ctx.rotate(-(p.d + Math.PI / 2));
-    ctx.strokeStyle = 'rgba(194,43,51,' + (0.5 + Math.sin(t * 5) * 0.3) + ')';
+    ctx.restore();
+    ctx.strokeStyle = 'rgba(194,43,51,' + (0.5 + Math.sin(t * 5) * 0.3).toFixed(3) + ')';
     ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(0, 0, 15, 0, 7); ctx.stroke();
-    if (p.rv > 0) { ctx.strokeStyle = '#e8a33d'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(0, 0, 19, -Math.PI / 2, -Math.PI / 2 + p.rv * 6.283); ctx.stroke(); }
+    if (p.rv > 0) { ctx.strokeStyle = '#e8a33d'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(0, 0, 19, -1.5708, -1.5708 + p.rv * 6.283); ctx.stroke(); }
   } else {
-    ctx.rotate(p.d);
+    ctx.save(); ctx.rotate(p.d);
     ctx.fillStyle = col; ctx.beginPath(); ctx.arc(0, 0, 8, 0, 7); ctx.fill();
     ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 1.5; ctx.stroke();
     ctx.fillStyle = '#d8c9a8'; ctx.beginPath(); ctx.arc(3.5, 0, 4, 0, 7); ctx.fill();
-    ctx.restore(); ctx.save(); ctx.translate(x, y);
+    ctx.restore();
     if (p.f) { ctx.fillStyle = '#ffbf5e'; ctx.fillRect(-4, -20, 8, 5); }
   }
   ctx.restore();
@@ -598,8 +583,7 @@ function drawCreature(t) {
     ctx.quadraticCurveTo(bx + 4, side * (12 + Math.sin(t * 9 * spdF + i) * 2), fx, fy);
     ctx.stroke();
   }
-  ctx.fillStyle = '#0c0c11';
-  ctx.beginPath(); ctx.ellipse(0, 0, 18, 8.5, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = '#0c0c11'; ctx.beginPath(); ctx.ellipse(0, 0, 18, 8.5, 0, 0, 7); ctx.fill();
   ctx.fillStyle = '#111117'; ctx.beginPath(); ctx.ellipse(6, 0, 10, 6, 0, 0, 7); ctx.fill();
   ctx.save(); ctx.translate(20, tw * 0.6); ctx.rotate(tw * 0.05);
   ctx.fillStyle = '#cfc8b6'; ctx.beginPath(); ctx.ellipse(0, 0, 8.5, 4.6, 0, 0, 7); ctx.fill();
@@ -608,7 +592,7 @@ function drawCreature(t) {
   ctx.restore();
   ctx.restore();
 }
-function drawDarkness(t) {
+function drawDarkness() {
   const dim = phase === 'won' ? 0.55 : 0.93;
   dctx.globalCompositeOperation = 'source-over';
   dctx.clearRect(0, 0, W, H);
@@ -616,7 +600,7 @@ function drawDarkness(t) {
   dctx.fillRect(0, 0, W, H);
   dctx.globalCompositeOperation = 'destination-out';
   const lights = [];
-  const me = view && view.me;
+  const me = view.me;
   if (me && me.s !== 2) lights.push({ x: local.x, y: local.y, r: me.s === 1 ? 120 : 195, i: 1 });
   for (const p of view.p) if (p.id !== NET.id && p.s !== 2) lights.push({ x: p.x, y: p.y, r: p.s === 1 ? 90 : 150, i: 0.85 });
   const pl = WORLD.plaza;
@@ -626,12 +610,12 @@ function drawDarkness(t) {
     if (flashes[i].until < now) flashes.splice(i, 1);
     else lights.push({ x: flashes[i].x, y: flashes[i].y, r: flashes[i].r, i: 0.7 * (flashes[i].until - now) / 450 });
   }
-  if (me && me.s === 2) lights.push({ x: view.c.x, y: view.c.y, r: 240, i: 0.5 });  // spectate
+  if (me && me.s === 2) lights.push({ x: view.c.x, y: view.c.y, r: 240, i: 0.5 });
   for (const L of lights) {
     const sx = w2sX(L.x), sy = w2sY(L.y);
     if (sx < -L.r || sx > W + L.r || sy < -L.r || sy > H + L.r) continue;
     const g = dctx.createRadialGradient(sx, sy, L.r * 0.12, sx, sy, L.r);
-    g.addColorStop(0, 'rgba(0,0,0,' + L.i + ')'); g.addColorStop(1, 'rgba(0,0,0,0)');
+    g.addColorStop(0, 'rgba(0,0,0,' + L.i.toFixed(3) + ')'); g.addColorStop(1, 'rgba(0,0,0,0)');
     dctx.fillStyle = g; dctx.beginPath(); dctx.arc(sx, sy, L.r, 0, 7); dctx.fill();
   }
   ctx.drawImage(dark, 0, 0, W, H);
@@ -643,36 +627,30 @@ function drawRipples() {
     const maxR = 90 + rp.i * 240;
     if (age * 300 > maxR) { ripples.splice(i, 1); continue; }
     const r = age * 300, a = (1 - r / maxR) * 0.5;
-    ctx.strokeStyle = rp.kd === 'voice' ? 'rgba(232,163,61,' + a + ')' : 'rgba(216,212,200,' + a * 0.8 + ')';
+    ctx.strokeStyle = rp.kd === 'voice' ? 'rgba(232,163,61,' + a.toFixed(3) + ')' : 'rgba(216,212,200,' + (a * 0.8).toFixed(3) + ')';
     ctx.lineWidth = rp.kd === 'voice' ? 2 : 1.2;
     ctx.beginPath(); ctx.arc(w2sX(rp.x), w2sY(rp.y), r, 0, 7); ctx.stroke();
   }
-  // creature sense ring — you can't see it, but you can feel it
-  const me = view && view.me;
+  const me = view.me;
   if (me && me.s !== 2 && creatureDist < 210) {
-    const a = (1 - creatureDist / 210) * (0.12 + Math.sin(performance.now() / 140) * 0.06);
-    ctx.strokeStyle = 'rgba(194,43,51,' + Math.max(0, a) + ')';
+    const a = (1 - creatureDist / 210) * (0.12 + Math.sin(now / 140) * 0.06);
+    ctx.strokeStyle = 'rgba(194,43,51,' + Math.max(0, a).toFixed(3) + ')';
     ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.arc(w2sX(view.c.x), w2sY(view.c.y), 26 + Math.sin(performance.now() / 140) * 4, 0, 7); ctx.stroke();
+    ctx.beginPath(); ctx.arc(w2sX(view.c.x), w2sY(view.c.y), 26 + Math.sin(now / 140) * 4, 0, 7); ctx.stroke();
   }
-  // dust puffs
-  const now2 = performance.now();
   for (let i = dusts.length - 1; i >= 0; i--) {
-    const dp = dusts[i], age = (now2 - dp.t) / 600;
+    const dp = dusts[i], age = (now - dp.t) / 600;
     if (age > 1) { dusts.splice(i, 1); continue; }
-    ctx.fillStyle = 'rgba(160,150,130,' + (0.3 * (1 - age)) + ')';
+    ctx.fillStyle = 'rgba(160,150,130,' + (0.3 * (1 - age)).toFixed(3) + ')';
     for (let k = 0; k < 5; k++) {
       ctx.beginPath(); ctx.arc(w2sX(dp.x) + Math.cos(k * 1.3) * age * 14, w2sY(dp.y) + Math.sin(k * 1.3) * age * 10, 2.5 * (1 - age), 0, 7); ctx.fill();
     }
   }
-  // pebbles in flight
-  for (let i = pebbles.length - 1; i >= 0; i--) {
-    const pb = pebbles[i];
-    if (pb.life <= 0) { pebbles.splice(i, 1); continue; }
+  for (const pb of pebbles) {
+    if (pb.life <= 0) continue;
     ctx.fillStyle = '#8f8a80';
     ctx.beginPath(); ctx.arc(w2sX(pb.x), w2sY(pb.y), 2.5, 0, 7); ctx.fill();
   }
-  // aim line
   if (me && me.s === 0 && me.r > 0 && phase === 'play') {
     const m = worldMouse(), dx = m.x - local.x, dy = m.y - local.y, len = Math.hypot(dx, dy) || 1;
     ctx.strokeStyle = 'rgba(216,212,200,0.14)'; ctx.setLineDash([3, 7]); ctx.lineWidth = 1;
@@ -694,7 +672,7 @@ function drawMinimap() {
   if (last) for (const f of last.d.fu) if (f[1] !== 'h' && f[1] !== 'i') {
     mc.fillStyle = '#e8a33d'; mc.fillRect(f[1] * s - 1, f[2] * s - 1, 2.5, 2.5);
   }
-  if (view) for (const p of view.p) {
+  for (const p of view.p) {
     if (p.s === 2) continue;
     mc.fillStyle = p.s === 1 ? '#c22b33' : (p.id === NET.id ? '#fff' : (roster.get(p.id) || { color: '#aaa' }).color);
     const px = (p.id === NET.id ? local.x : p.x) * s, py = (p.id === NET.id ? local.y : p.y) * s;
@@ -702,7 +680,7 @@ function drawMinimap() {
   }
 }
 
-/* ============================ main loop ============================ */
+/* ---------------- main loop ---------------- */
 let lastT = performance.now(), clickT = 0, ambientT = 5;
 function frame(now) {
   requestAnimationFrame(frame);
@@ -717,7 +695,6 @@ function frame(now) {
   const me = view.me;
   creatureDist = me ? Math.hypot(view.c.x - local.x, view.c.y - local.y) : 1e9;
 
-  // camera
   const fx = me && me.s !== 2 ? local.x : view.c.x;
   const fy = me && me.s !== 2 ? local.y : view.c.y;
   cam.x += (fx - cam.x) * Math.min(1, dt * 6);
@@ -725,17 +702,14 @@ function frame(now) {
   shake = Math.max(0, shake - dt * 30);
   redPulse = Math.max(0, redPulse - dt * 0.7);
 
-  // pebbles sim
   for (const pb of pebbles) { pb.x += pb.vx * dt; pb.y += pb.vy * dt; pb.vx *= (1 - 2.2 * dt); pb.vy *= (1 - 2.2 * dt); pb.life -= dt; }
 
-  // ------ audio state ------
   if (ac) {
     if (growlGain) {
-      const gv = view.c.s === 'hunt' && creatureDist < 700 && me && me.s !== 2
-        ? clamp(1 - creatureDist / 700, 0, 1) * 0.16 : 0;
+      const gv = view.c.s === 'hunt' && creatureDist < 700 && me && me.s !== 2 ? clamp(1 - creatureDist / 700, 0, 1) * 0.16 : 0;
       growlGain.gain.setTargetAtTime(gv, ac.currentTime, 0.2);
     }
-    if (me && me.s === 0 && creatureDist < 640) {           // heartbeat
+    if (me && me.s === 0 && creatureDist < 640) {
       const iv = lerp(0.34, 1.15, clamp(creatureDist / 640, 0, 1));
       if (t >= hbNext) { heartbeat(lerp(0.5, 0.14, creatureDist / 640)); hbNext = t + iv; }
     }
@@ -743,13 +717,15 @@ function frame(now) {
       clickT = t + 0.7 + Math.random();
       sfx.click(clamp(1 - creatureDist / 520, 0, 1), view.c.x, view.c.y);
     }
-    if (view.c.s === 'hunt' && !prevHunt && creatureDist < 560 && me && me.s !== 2) { shake = Math.max(shake, 8); }
+    if (view.c.s === 'hunt' && !prevHunt && creatureDist < 560 && me && me.s !== 2) shake = Math.max(shake, 8);
     prevHunt = view.c.s === 'hunt';
     ambientT -= dt;
-    if (ambientT < 0) { ambientT = 8 + Math.random() * 14; noiseHit(ac.currentTime, 1.4, 500 + Math.random() * 600, 0.5, 0.03, cam.x + (Math.random() - 0.5) * 900, cam.y + (Math.random() - 0.5) * 900); }
+    if (ambientT < 0) {
+      ambientT = 8 + Math.random() * 14;
+      noiseHit(ac.currentTime, 1.4, 500 + Math.random() * 600, 0.5, 0.03, cam.x + (Math.random() - 0.5) * 900, cam.y + (Math.random() - 0.5) * 900);
+    }
   }
 
-  // ------ draw ------
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.fillStyle = '#04050a'; ctx.fillRect(0, 0, W, H);
   const shx = (Math.random() - 0.5) * shake, shy = (Math.random() - 0.5) * shake;
@@ -759,27 +735,26 @@ function frame(now) {
   drawBuildings();
   drawGenerator(t);
   drawFuses(t);
-  drawCreature(t);                        // beneath darkness: hidden in the dark
+  drawCreature(t);
   for (const p of view.p) if (p.s !== 2) drawPlayer(p, t, p.id === NET.id);
   ctx.restore();
 
-  drawDarkness(t);
+  drawDarkness();
 
   ctx.save(); ctx.translate(shx, shy);
-  drawRipples();                          // sound made visible — always above darkness
+  drawRipples();
   ctx.restore();
 
-  // ash
   ctx.fillStyle = 'rgba(200,195,185,0.16)';
   for (const a of ash) {
     a.x += dt * 12 * a.z; a.y += dt * 5 * a.z;
-    if (a.x > W + 10) a.x = -10; if (a.y > H + 10) a.y = -10;
+    if (a.x > W + 10) a.x = -10;
+    if (a.y > H + 10) a.y = -10;
     ctx.fillRect(a.x, a.y, a.z * 1.8, a.z * 1.8);
   }
-  // grain + vignette
-  if (++grainI % 2 === 0) grainI = 0;
+  grainI = (grainI + 1) % 3;
   ctx.save(); ctx.globalAlpha = 0.5;
-  ctx.translate(-(Math.random() * 160 | 0), -(Math.random() * 160 | 0));
+  ctx.translate(-((Math.random() * 160) | 0), -((Math.random() * 160) | 0));
   ctx.fillStyle = grainPat[grainI]; ctx.fillRect(0, 0, W + 160, H + 160);
   ctx.restore();
   ctx.drawImage(vign, 0, 0);
@@ -791,18 +766,20 @@ function frame(now) {
 }
 requestAnimationFrame(frame);
 
-/* ============================ boot ============================ */
+/* ---------------- boot ---------------- */
+joinRoom = (new URLSearchParams(location.search).get('room') || '').toUpperCase();
+$('room').value = joinRoom;
 $('begin').addEventListener('click', async () => {
   myName = $('name').value.trim() || 'SURVIVOR';
+  joinRoom = $('room').value.trim().toUpperCase() || joinRoom;
   audioInit();
   if (ac.state === 'suspended') await ac.resume();
   $('title').classList.add('hidden');
   $('miccheck').classList.remove('hidden');
   await micStart();
 });
-$('skipMic').addEventListener('click', () => {
-  if (MIC.calib) return;                  // wait for calibration to finish or mic denial
-  connect();
-});
-$('name').addEventListener('keydown', e => { if (e.key === 'Enter') $('begin').click(); e.stopPropagation(); });
-</script>
+$('skipMic').addEventListener('click', () => { MIC.calib = false; connect(); });
+[$('name'), $('room')].forEach(el => el.addEventListener('keydown', e => {
+  if (e.key === 'Enter') $('begin').click();
+  e.stopPropagation();
+}));
