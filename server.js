@@ -426,3 +426,90 @@ const httpSrv = http.createServer ? null : null; // placeholder to keep linters 
 /* attach to a real server: */
 const srv = require('http').createServer();
 wss.attach ? 0 : 0;
+/* ---------------- websocket (final) ---------------- */
+const netServer = http.createServer((req, res) => {
+  const p = req.url.split('?')[0];
+  let file = null;
+  if (p === '/') file = 'public/index.html';
+  else if (p === '/worldgen.js') file = 'shared/worldgen.js';
+  else if (p === '/game.js') file = 'public/game.js';
+  if (!file) { res.writeHead(404); return res.end('404'); }
+  fs.readFile(path.join(__dirname, file), (err, data) => {
+    if (err) { res.writeHead(404); return res.end('404'); }
+    res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
+                         'Cache-Control': 'no-cache' });
+    res.end(data);
+  });
+});
+const wssFinal = new WebSocketServer({ server: netServer });
+
+wssFinal.on('connection', ws => {
+  if (players.size >= MAX_PLAYERS) { ws.send(JSON.stringify({ t: 'full' })); ws.close(); return; }
+  ws.isAlive = true;
+  ws.on('pong', () => ws.isAlive = true);
+  ws.on('message', raw => onMsg(ws, raw));
+  ws.on('close', () => removePlayer(ws));
+});
+
+setInterval(() => {
+  for (const ws of players.keys()) {
+    if (!ws.isAlive) { ws.terminate(); continue; }
+    ws.isAlive = false; ws.ping();
+  }
+}, 25000);
+
+function removePlayer(ws) {
+  const p = players.get(ws);
+  if (!p) return;
+  p.gone = true;
+  dropFuse(p);
+  players.delete(ws);
+  sendAll({ t: 'leave', id: p.id });
+  if (game.creature.target === p) game.creature.target = null;
+}
+
+function onMsg(ws, raw) {
+  let m; try { m = JSON.parse(raw); } catch { return; }
+  const p = players.get(ws);
+
+  if (m.t === 'join') {
+    if (p) return;
+    const name = String(m.name || 'SURVIVOR').replace(/[^\w \-]/g, '').slice(0, 14).toUpperCase() || 'SURVIVOR';
+    const used = new Set(playersArr().map(q => q.color));
+    const color = COLORS.find(c => !used.has(c)) || COLORS[players.size % COLORS.length];
+    const np = { id: ++idSeq, name, color, ws, input: { u: 0, d: 0, l: 0, r: 0, run: 0, sneak: 0, e: 0 } };
+    players.set(ws, np);
+    respawn(np);
+    ws.send(JSON.stringify({
+      t: 'welcome', id: np.id, color, seed: game.seed, world: game.world,
+      grace: GRACE, phase: game.phase,
+      roster: playersArr().filter(q => q !== np).map(q => ({ id: q.id, name: q.name, color: q.color }))
+    }));
+    sendAll({ t: 'peer', id: np.id, name, color });
+    return;
+  }
+  if (!p) return;
+
+  switch (m.t) {
+    case 'input':
+      Object.assign(p.input, { u: !!m.u, d: !!m.d, l: !!m.l, r: !!m.r, run: !!m.run, sneak: !!m.sneak, e: !!m.e });
+      break;
+    case 'noise':                                            // real microphone event
+      if (p.state === 'dead' || game.phase !== 'play') break;
+      if (p.micCd > game.time) break;
+      p.micCd = game.time + 0.15;
+      emitNoise(p.x, p.y, 0.45 + Math.min(1, Math.max(0, +m.v || 0)) * 2.3, 'voice', p);
+      break;
+    case 'throw':
+      if (p.state !== 'alive' || p.rocks <= 0) break;
+      { const len = Math.hypot(m.dx, m.dy) || 1, dx = m.dx / len, dy = m.dy / len;
+        p.rocks--; p.rockT = 0;
+        game.rocksAir.push({ x: p.x + dx * 14, y: p.y + dy * 14, vx: dx * 420, vy: dy * 420, life: 0.62 });
+        ev('thrown', p.x, p.y, 0.2, p.id);
+        game.events[game.events.length - 1].dx = +dx.toFixed(2);
+        game.events[game.events.length - 1].dy = +dy.toFixed(2); }
+      break;
+  }
+}
+
+netServer.listen(PORT, () => console.log('a quiet place → http://localhost:' + PORT));
