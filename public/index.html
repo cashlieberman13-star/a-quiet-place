@@ -3,151 +3,147 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>A Quiet Place</title>
+<meta name="theme-color" content="#000000">
+<title>A QUIET PLACE — make no sound</title>
 <style>
-  :root { --ink:#c9cfd2; --dim:#6b7478; --acc:#9dff4a; --bad:#e2483c; --warn:#e8b23a; }
-  * { box-sizing:border-box; margin:0; padding:0; }
-  html,body { height:100%; background:#05070a; color:var(--ink);
-    font:14px/1.5 ui-monospace,"SF Mono",Menlo,Consolas,monospace; overflow:hidden; }
-  canvas { display:block; }
-  #hud, #menu { position:fixed; inset:0; }
-  #hud { pointer-events:none; }
+  :root{
+    --bone:#d8d4c8; --dim:#7d7a70; --red:#c22b33; --amber:#e8a33d;
+    --disp:"Arial Narrow","Helvetica Neue",Impact,"Segoe UI",sans-serif;
+    --body:"Segoe UI",system-ui,-apple-system,sans-serif;
+    --mono:ui-monospace,"Cascadia Mono","SF Mono",Consolas,monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;background:#020308;overflow:hidden}
+  body{font-family:var(--body);color:var(--bone);font-size:13px}
+  canvas#cv{position:fixed;inset:0;display:block}
+  .hidden{display:none!important}
+  button{font-family:var(--disp);letter-spacing:.28em;text-transform:uppercase;background:none;
+    border:1px solid rgba(216,212,200,.5);color:var(--bone);padding:12px 30px;font-size:13px;
+    cursor:pointer;transition:.18s}
+  button:hover{background:var(--bone);color:#05060a;border-color:var(--bone)}
+  button:disabled{opacity:.35;cursor:default}
+  button.ghost{border-color:rgba(216,212,200,.22);font-size:11px;padding:9px 18px}
+  input[type=text]{background:none;border:none;border-bottom:1px solid rgba(216,212,200,.4);
+    color:var(--bone);font-family:var(--disp);letter-spacing:.2em;text-transform:uppercase;
+    font-size:16px;padding:8px 4px;width:260px;outline:none;text-align:center}
+  input[type=text]::placeholder{color:rgba(216,212,200,.25)}
 
-  /* ------------------------------------------------------------- menu */
- #menu { display:none; align-items:center; justify-content:center;
-  background:radial-gradient(ellipse at 50% 40%, #0d1116 0%, #04060a 70%); z-index:50; }
-  .panel { width:min(520px,92vw); border:1px solid #1b2228; background:#080b0f; padding:28px 30px; }
-  .panel h1 { font:300 34px/1.1 Georgia,serif; letter-spacing:.14em; text-transform:uppercase; }
-  .panel h1 span { color:var(--acc); }
-  .tag { color:var(--dim); margin:10px 0 22px; font-size:12px; letter-spacing:.06em; }
-  label { display:block; font-size:11px; color:var(--dim); text-transform:uppercase;
-    letter-spacing:.12em; margin:14px 0 5px; }
-  input[type=text] { width:100%; background:#0d1116; border:1px solid #232b32; color:var(--ink);
-    padding:9px 11px; font:inherit; }
-  input[type=range] { width:100%; accent-color:var(--acc); }
-  .row { display:flex; gap:12px; } .row > * { flex:1; }
-  button { width:100%; margin-top:20px; background:var(--acc); color:#04060a; border:0;
-    padding:12px; font:600 13px/1 inherit; letter-spacing:.16em; text-transform:uppercase; cursor:pointer; }
-  button:disabled { background:#232b32; color:#4a5257; cursor:default; }
-  .mini { background:none; border:1px solid #232b32; color:var(--ink); margin-top:10px; }
-  .calib { border:1px solid #1b2228; padding:12px; margin-top:16px; font-size:12px; }
-  .bar { height:8px; background:#111a1f; margin-top:8px; position:relative; overflow:hidden; }
-  .bar i { position:absolute; inset:0 auto 0 0; background:var(--acc); width:0; }
-  .keys { color:var(--dim); font-size:11px; margin-top:18px; line-height:1.9; }
-  .keys b { color:#8c979c; font-weight:400; }
+  /* ---------- title / end screens ---------- */
+  .screen{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:22px;background:radial-gradient(ellipse at 50% 60%,#070a12 0%,#020308 70%);z-index:40}
+  #rings{position:absolute;inset:0;overflow:hidden;pointer-events:none}
+  #rings i{position:absolute;left:50%;top:58%;width:120px;height:120px;margin:-60px 0 0 -60px;
+    border:1px solid rgba(216,212,200,.16);border-radius:50%;animation:ring 7s linear infinite}
+  #rings i:nth-child(2){animation-delay:1.75s}#rings i:nth-child(3){animation-delay:3.5s}
+  #rings i:nth-child(4){animation-delay:5.25s;border-color:rgba(194,43,51,.14)}
+  @keyframes ring{0%{transform:scale(.2);opacity:0}12%{opacity:1}100%{transform:scale(11);opacity:0}}
+  .eyebrow{font-family:var(--mono);font-size:10px;letter-spacing:.4em;color:var(--dim);text-transform:uppercase}
+  .eyebrow b{color:var(--red);font-weight:400;animation:blink 1.6s steps(2) infinite}
+  @keyframes blink{50%{opacity:.15}}
+  h1{font-family:var(--disp);font-weight:700;font-size:clamp(46px,9vw,110px);line-height:.92;
+    letter-spacing:.14em;text-transform:uppercase;text-align:center;
+    text-shadow:0 0 34px rgba(216,212,200,.14);animation:flicker 6s infinite}
+  @keyframes flicker{0%,93%,95.5%,100%{opacity:1}94%,95%{opacity:.5}}
+  .tag{font-size:15px;color:var(--dim);letter-spacing:.06em;text-align:center;max-width:520px}
+  .tag em{color:var(--bone);font-style:normal}
+  .rules{display:flex;gap:26px;flex-wrap:wrap;justify-content:center;margin-top:6px;max-width:760px}
+  .rules div{font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--dim);
+    text-transform:uppercase;line-height:1.9;text-align:left}
+  .rules b{color:var(--bone);font-weight:400}
+  .rules .warn b{color:var(--red)}
+  .foot{position:absolute;bottom:20px;font-family:var(--mono);font-size:9px;letter-spacing:.3em;
+    color:rgba(125,122,112,.5);text-transform:uppercase}
 
-  /* -------------------------------------------------------------- hud */
-  #mic { position:absolute; left:26px; bottom:26px; width:26px; height:200px;
-    border:1px solid #222b31; background:#080b0fcc; }
-  #mic .fill { position:absolute; left:0; right:0; bottom:0; height:0%;
-    background:linear-gradient(#e2483c,#e8b23a 45%,var(--acc)); transition:height .05s linear; }
-  #mic .thr { position:absolute; left:-5px; right:-5px; height:2px; background:#fff; opacity:.85; }
-  #micLbl { position:absolute; left:20px; bottom:236px; font-size:10px; letter-spacing:.16em;
-    color:var(--dim); text-transform:uppercase; }
-  #micDb { position:absolute; left:58px; bottom:26px; font-size:11px; color:var(--dim); }
+  /* ---------- mic check ---------- */
+  #miccheck .meter{width:340px;height:8px;border:1px solid rgba(216,212,200,.3);position:relative}
+  #mcFill{position:absolute;inset:1px auto 1px 1px;width:0%;background:var(--bone);transition:width .05s}
+  #mcThr{position:absolute;top:-5px;bottom:-5px;width:2px;background:var(--red);left:50%}
+  #mcStatus{font-family:var(--mono);font-size:11px;letter-spacing:.3em;color:var(--dim);text-transform:uppercase;min-height:16px}
 
-  #stance { position:absolute; left:58px; bottom:48px; font-size:12px; letter-spacing:.1em; }
-  #breath { position:absolute; left:58px; bottom:70px; width:90px; height:4px; background:#111a1f; }
-  #breath i { display:block; height:100%; width:100%; background:#4a90d9; }
-
-  #obj { position:absolute; right:26px; top:26px; width:250px; text-align:right; font-size:12px; }
-  #obj h3 { font:400 11px/1 inherit; letter-spacing:.18em; color:var(--dim);
-    text-transform:uppercase; margin-bottom:8px; }
-  #obj .o { color:#9aa4a8; } #obj .o.done { color:var(--acc); text-decoration:line-through; opacity:.6; }
-  #team { position:absolute; right:26px; bottom:26px; width:240px; text-align:right; font-size:12px; }
-  #team .p { color:#8c979c; } #team .p.dn { color:var(--warn); } #team .p.dd { color:#454d51; text-decoration:line-through; }
-  #team .p b { color:var(--acc); font-weight:400; }
-
-  #log { position:absolute; left:26px; top:26px; width:380px; font-size:12px; }
-  #log div { opacity:0; animation:fi .25s forwards; margin-bottom:3px; color:#8c979c; }
-  #log .good { color:var(--acc); } #log .bad { color:var(--bad); } #log .warn { color:var(--warn); }
-  @keyframes fi { to { opacity:1; } }
-
-  #cross { position:absolute; left:50%; top:50%; width:3px; height:3px; margin:-1.5px;
-    background:#fff8; border-radius:50%; }
-  #prompt { position:absolute; left:50%; top:56%; transform:translateX(-50%); font-size:13px;
-    letter-spacing:.06em; text-align:center; }
-  #prompt b { color:var(--acc); }
-  #progress { width:180px; height:3px; background:#ffffff22; margin:8px auto 0; }
-  #progress i { display:block; height:100%; width:0; background:var(--acc); }
-
-  #vig { position:absolute; inset:0; opacity:0;
-    box-shadow:inset 0 0 240px 90px #7a0d06; transition:opacity .3s; }
-  #near { position:absolute; inset:0; opacity:0; pointer-events:none;
-    box-shadow:inset 0 0 300px 60px #000; transition:opacity .6s; }
-  #flash { position:absolute; inset:0; background:#fff; opacity:0; pointer-events:none; }
-
-  #banner { position:absolute; left:0; right:0; top:38%; text-align:center;
-    font:300 42px/1.2 Georgia,serif; letter-spacing:.18em; text-transform:uppercase;
-    opacity:0; transition:opacity .8s; }
-  #banner small { display:block; font:400 13px/2 ui-monospace,monospace;
-    letter-spacing:.1em; text-transform:none; color:var(--dim); }
-
-  #wheel { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
-    display:none; gap:10px; }
-  #wheel span { display:block; border:1px solid #2b343a; background:#080b0fdd; padding:8px 12px; font-size:12px; }
-  #chat { position:absolute; left:26px; bottom:250px; width:380px; display:none; }
-  #chat input { width:100%; background:#080b0fdd; border:1px solid #2b343a; color:var(--ink); padding:7px 9px; font:inherit; }
+  /* ---------- HUD ---------- */
+  #hud{position:fixed;inset:0;pointer-events:none;z-index:20;font-family:var(--mono)}
+  #obj{position:absolute;top:16px;left:18px;font-size:10px;letter-spacing:.24em;color:var(--dim);text-transform:uppercase;line-height:2}
+  #obj b{color:var(--amber);font-weight:400}
+  #obj .wake{color:var(--red)}
+  #log{position:absolute;left:18px;bottom:66px;display:flex;flex-direction:column-reverse;gap:4px;max-width:360px}
+  #log div{font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--bone);
+    background:rgba(2,3,8,.55);padding:4px 8px;border-left:2px solid rgba(216,212,200,.35);
+    animation:logfade 9s forwards}
+  #log div.bad{border-color:var(--red);color:#e8b9bc}
+  #log div.good{border-color:var(--amber)}
+  @keyframes logfade{0%,80%{opacity:1}100%{opacity:0}}
+  #prompt{position:absolute;left:50%;bottom:120px;transform:translateX(-50%);font-size:11px;
+    letter-spacing:.3em;color:var(--bone);text-transform:uppercase;text-shadow:0 0 10px #000}
+  #mic{position:absolute;left:50%;bottom:22px;transform:translateX(-50%);width:240px}
+  #mic .lbl{font-size:9px;letter-spacing:.34em;color:var(--dim);text-transform:uppercase;
+    display:flex;justify-content:space-between;margin-bottom:5px}
+  #mic .bar{height:7px;border:1px solid rgba(216,212,200,.28);position:relative;background:rgba(2,3,8,.5)}
+  #micFill{position:absolute;inset:1px auto 1px 1px;width:0%;background:#6f8f6a;transition:background .1s}
+  #micThr{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--red)}
+  #mic.hot .bar{border-color:var(--red)} #mic.hot #micFill{background:var(--red)}
+  #mic.off .lbl em{color:var(--red);font-style:normal}
+  #rocksHud{position:absolute;right:18px;bottom:22px;font-size:10px;letter-spacing:.24em;color:var(--dim);text-transform:uppercase;text-align:right}
+  #rocksHud i{display:inline-block;width:9px;height:9px;border:1px solid var(--dim);transform:rotate(45deg);margin-left:7px}
+  #rocksHud i.full{background:var(--bone);border-color:var(--bone)}
+  #mini{position:absolute;top:16px;right:18px;border:1px solid rgba(216,212,200,.22);background:rgba(2,3,8,.6)}
+  #banner{position:fixed;top:24%;left:0;right:0;text-align:center;z-index:30;pointer-events:none;
+    font-family:var(--disp);font-size:clamp(20px,3.6vw,40px);letter-spacing:.4em;text-transform:uppercase;
+    color:var(--bone);text-shadow:0 0 30px rgba(0,0,0,.9);opacity:0;transition:opacity .5s}
+  #banner.show{opacity:1} #banner.red{color:var(--red)}
+  #pulse{position:fixed;inset:0;pointer-events:none;z-index:15;opacity:0;
+    background:radial-gradient(ellipse at center,transparent 55%,rgba(150,20,26,.55) 100%)}
+  #end h2{font-family:var(--disp);font-size:clamp(30px,6vw,64px);letter-spacing:.24em;text-transform:uppercase}
+  #end .sub{font-family:var(--mono);font-size:11px;letter-spacing:.3em;color:var(--dim);text-transform:uppercase}
+  #end h2.red{color:var(--red)} #end h2.amber{color:var(--amber)}
 </style>
 </head>
 <body>
+<canvas id="cv"></canvas>
 
-<div id="hud">
-  <div id="near"></div><div id="vig"></div><div id="flash"></div>
-  <div id="cross"></div>
-  <div id="micLbl">sound</div>
-  <div id="mic"><div class="fill"></div><div class="thr"></div></div>
-  <div id="micDb">-∞ dB</div>
-  <div id="stance">STANDING</div>
-  <div id="breath"><i></i></div>
-  <div id="obj"><h3>Objectives</h3><div id="objList"></div></div>
-  <div id="team"></div>
+<div id="hud" class="hidden">
+  <div id="obj"></div>
+  <canvas id="mini" width="140" height="140"></canvas>
   <div id="log"></div>
   <div id="prompt"></div>
-  <div id="banner"></div>
-  <div id="wheel">
-    <span>1 — QUIET</span><span>2 — FOLLOW ME</span><span>3 — DANGER</span><span>4 — HELP</span>
+  <div id="mic">
+    <div class="lbl"><span>YOUR MICROPHONE IS LIVE</span><em></em></div>
+    <div class="bar"><div id="micFill"></div><div id="micThr"></div></div>
   </div>
-  <div id="chat"><input id="chatIn" maxlength="140" placeholder="message (enter to send)"></div>
+  <div id="rocksHud">stones <i></i><i></i><i></i><br><span style="opacity:.6">click to throw · decoy</span></div>
+</div>
+<div id="pulse"></div>
+<div id="banner"></div>
+
+<div id="title" class="screen">
+  <div id="rings"><i></i><i></i><i></i><i></i></div>
+  <div class="eyebrow">co-op survival · 1–8 players · <b>● live audio feed</b></div>
+  <h1>A Quiet<br>Place</h1>
+  <div class="tag">It cannot see you. <em>It can hear everything.</em><br>
+    Your real microphone is wired straight into the dark — every cough, every word, every chair scrape.</div>
+  <input type="text" id="name" maxlength="14" placeholder="YOUR NAME" autocomplete="off">
+  <button id="begin">Step into the dark</button>
+  <div class="rules">
+    <div><b>WASD</b> move<br><b>SHIFT</b> run — loud<br><b>C</b> sneak — silent</div>
+    <div><b>E</b> doors · fuses · revive<br><b>CLICK</b> throw stone — decoy<br><b>HEADPHONES</b> strongly advised</div>
+    <div class="warn">find <b>5 fuses</b>, power the radio tower.<br>doors creak. running is a death wish.<br><b>silence is survival.</b></div>
+  </div>
+  <div class="foot">terrain · buildings · creature · sound — all generated in code, zero assets</div>
 </div>
 
-<div id="menu">
-  <div class="panel">
-    <h1>A Quiet <span>Place</span></h1>
-    <p class="tag">It hunts by sound. Your microphone is live. Co-op, 1–8.</p>
-
-    <div class="row">
-      <div><label>Name</label><input id="fName" type="text" value="Survivor" maxlength="16"></div>
-      <div><label>Room code</label><input id="fRoom" type="text" value="QUIET" maxlength="8"></div>
-    </div>
-
-        <div class="calib">
-      <div id="micState">Microphone not enabled.</div>
-      <div class="bar"><i id="calBar"></i></div>
-      <label>Noise threshold — <span id="thrVal">28</span></label>
-      <input id="fThr" type="range" min="2" max="80" value="28">
-      <label>Input gain — <span id="gainVal">1.0</span>×</label>
-      <input id="fGain" type="range" min="0.2" max="4" step="0.1" value="1">
-    </div>
-    <button class="mini" id="btnMic">Enable microphone</button>
-    <button id="btnPlay" >Enter the valley</button>
-
-    <div class="keys">
-      <b>WASD</b> move &nbsp; <b>Shift</b> sprint (loud) &nbsp; <b>Ctrl</b> crouch &nbsp; <b>Z</b> prone<br>
-      <b>V</b> hold breath &nbsp; <b>E</b> interact / revive &nbsp; <b>F</b> flashlight &nbsp; <b>Q</b> drop can<br>
-      <b>C</b> hand signals &nbsp; <b>T</b> chat &nbsp; <b>Esc</b> release mouse
-    </div>
-  </div>
+<div id="miccheck" class="screen hidden">
+  <div class="eyebrow">audio surveillance · calibration</div>
+  <h1 style="font-size:clamp(24px,4vw,44px)">Hold still.<br>Listening for room tone…</h1>
+  <div class="meter"><div id="mcFill"></div><div id="mcThr"></div></div>
+  <div id="mcStatus">REQUESTING MICROPHONE</div>
+  <button id="skipMic" class="ghost">skip — play in silence (no mic)</button>
 </div>
 
-<script type="importmap">
-{ "imports": {
-    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
-} }
-</script>
-<script src="../shared/worldgen.js"></script>
-<script type="module" src="game.js"></script>
+<div id="end" class="screen hidden">
+  <h2 id="endTitle"></h2>
+  <div class="sub" id="endSub"></div>
+</div>
+
+<script src="/worldgen.js"></script>
+<script src="/game.js"></script>
 </body>
 </html>
-
