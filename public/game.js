@@ -1091,8 +1091,11 @@ class Game {
     this.keys = {};
     this.bindInput();
 
+    // Add defensive fallback safety checks to configuration settings
+    const cleanCfg = this.cfg || {};
     this.net = new Net(m => this.onMsg(m));
-    this.net.send({ t: 'join', name: cfg.name, room: cfg.room });
+    this.net.send({ t: 'join', name: cleanCfg.name || 'Survivor', room: cleanCfg.room || 'QUIET' });
+
 
     addEventListener('resize', () => {
       this.cam.aspect = innerWidth / innerHeight;
