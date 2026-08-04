@@ -1,519 +1,428 @@
-import http from 'http';
-import fs from 'fs';
-import path from 'path';
-import { WebSocketServer } from 'ws';
-import * as W from './shared/worldgen.js';
-import { fileURLToPath } from 'url';
+'use strict';
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const { WebSocketServer } = require('ws');
+const WG = require('./shared/worldgen.js');
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const PORT = process.env.PORT || 8080;
-const HOST = process.argv.includes('--host') ? process.argv[process.argv.indexOf('--host') + 1] : '0.0.0.0';
-
-const TICK_HZ = 20, SNAP_HZ = 12;
+const PORT = process.env.PORT || 3000;
+const TICK = 1 / 30, BCAST_EVERY = 2;      // sim 30 Hz, snapshots 15 Hz
 const MAX_PLAYERS = 8;
+const GRACE = 12;                          // seconds before the creature starts listening
+const COLORS = ['#c9b27c', '#8fae7e', '#7d9dc4', '#c48a8a', '#a98fc4', '#7fbcb2', '#c49c7d', '#9aa8b8'];
+const SPEEDS = { roam: 46, investigate: 100, search: 72, hunt: 192 };
+const GAITS = { sneak: 1, walk: 2, run: 3 };
 
-const CANS_REQUIRED = 4;
-const FUEL_TIME = 60;    // seconds the truck needs
-const BLEED_TIME = 75;   // seconds until a downed player dies
-const REVIVE_TIME = 6;
-
-// ------------------------------------------------------------- static files
-const MIME = {
-  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.ico': 'image/x-icon',
-};
-const ROOT = __dirname;
-
-
-const server = http.createServer((req, res) => {
-  let url = decodeURIComponent(req.url.split('?')[0]);
-  if (url === '/') url = '/public/index.html';
-  else if (!url.startsWith('/shared/') && !url.startsWith('/public/')) url = '/public' + url;
-  const file = path.normalize(path.join(ROOT, url));
-  if (!file.startsWith(ROOT)) { res.writeHead(403).end('forbidden'); return; }
-  fs.readFile(file, (err, buf) => {
-    if (err) { res.writeHead(404).end('not found'); return; }
-    res.writeHead(200, {
-      'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
-      'Cache-Control': 'no-cache',
-    });
-    res.end(buf);
+/* ---------------- static files ---------------- */
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8' };
+http.createServer((req, res) => {
+  const p = req.url.split('?')[0];
+  let file = null;
+  if (p === '/') file = 'public/index.html';
+  else if (p === '/worldgen.js') file = 'shared/worldgen.js';
+  else if (p === '/game.js') file = 'public/game.js';
+  if (!file) { res.writeHead(404); return res.end('404'); }
+  fs.readFile(path.join(__dirname, file), (err, data) => {
+    if (err) { res.writeHead(404); return res.end('404'); }
+    res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
+                         'Cache-Control': 'no-cache' });
+    res.end(data);
   });
-});
+}).listen(PORT, () => console.log('a quiet place → http://localhost:' + PORT));
 
-// ------------------------------------------------------------------- utils
-const now = () => Date.now();
-const rnd = (a, b) => a + Math.random() * (b - a);
-const dist2 = (ax, az, bx, bz) => (ax - bx) ** 2 + (az - bz) ** 2;
+/* ---------------- helpers ---------------- */
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const R = v => Math.round(v);
 
-function walkableNear(x, z, seed, tries = 24) {
-  for (let i = 0; i < tries; i++) {
-    const a = Math.random() * Math.PI * 2, r = Math.random() * 90;
-    const nx = W.clamp(x + Math.cos(a) * r, -W.HALF + 40, W.HALF - 40);
-    const nz = W.clamp(z + Math.sin(a) * r, -W.HALF + 40, W.HALF - 40);
-    if (W.isWalkable(nx, nz, seed)) return { x: nx, z: nz };
-  }
-  return { x: W.TRUCK.x, z: W.TRUCK.z };
-}
+/* ---------------- game state ---------------- */
+const players = new Map();                 // ws -> player
+let idSeq = 0;
 
-// ------------------------------------------------------------- the creature
-const ST = { PATROL: 'patrol', INVESTIGATE: 'investigate', STALK: 'stalk', CHARGE: 'charge', STUNNED: 'stunned' };
-const SPEED = { patrol: 3.4, investigate: 7.2, stalk: 5.0, charge: 15.2, stunned: 0 };
-
-let creatureSeq = 1;
-function makeCreature(seed, i) {
-  const p = walkableNear(rnd(-700, 700), rnd(-700, 700), seed);
-  return {
-    id: 'c' + (creatureSeq++),
-    x: p.x, z: p.z, y: W.heightAt(p.x, p.z, seed), yaw: Math.random() * 6.28,
-    state: ST.PATROL, speed: 0,
-    tx: p.x, tz: p.z,          // current point of interest
-    attention: 0,              // 0..1 confidence it knows where you are
-    lastHeard: 0,
-    stunUntil: 0,
-    screechAt: 0,
-    lungeAt: 0,
-    idle: 0,
+function makeGame() {
+  const seed = (Math.random() * 0xffffffff) >>> 0;
+  const world = WG.generate(seed);
+  const far = world.waypoints.reduce((best, w) =>
+    dist(w, world.spawn) > dist(best, world.spawn) ? w : best, world.waypoints[0]);
+  const g = {
+    seed, world, time: 0, roundT: 0, phase: 'play', phaseT: 0,
+    doors: world.doors.map(rect => ({ rect, open: false, breachT: 0 })),
+    fuses: world.fuses.map(f => ({ id: f.id, x: f.x, y: f.y, st: 'ground', heldBy: null })),
+    genN: 0, genTotal: world.fuses.length,
+    creature: { x: far.x, y: far.y, dir: 0, state: 'roam', goal: null, target: null,
+                lastKnown: null, huntT: 0, searchT: 0, subT: 0, searchC: null,
+                idleT: 0, attackCd: 0, execT: 0, pauseT: 0, stuckT: 0,
+                detourT: 0, detourSign: 1, senseT: 0, shriekCd: 0 },
+    rocksAir: [], events: [], solidsCache: null, solidsDirty: false
   };
+  return g;
+}
+let game = makeGame();
+
+function playersArr() { return [...players.values()]; }
+
+function solids() {
+  if (game.solidsCache && !game.solidsDirty) return game.solidsCache;
+  const arr = game.world.walls.slice();
+  for (const d of game.doors) if (!d.open) {
+    const r = Object.assign({}, d.rect); r.door = d; arr.push(r);
+  }
+  game.solidsCache = arr; game.solidsDirty = false;
+  return arr;
 }
 
-/** Distance a noise carries, and how strongly it registers here. */
-function hearing(cre, x, z, loud) {
-  const range = 34 + loud * 560;
-  const d = Math.sqrt(dist2(cre.x, cre.z, x, z));
-  if (d > range) return 0;
-  const falloff = 1 - d / range;
-  return loud * falloff * falloff;
+function buildingAt(pt) {
+  for (const b of game.world.buildings) if (WG.pointInRect(pt.x, pt.y, b)) return b;
+  return null;
 }
 
-// -------------------------------------------------------------------- room
-class Room {
-  constructor(code) {
-    this.code = code;
-        // Safe manual string-to-seed hash fallback loop
-    let safeSeed = 0;
-    const cleanCode = String(code || 'QUIET');
-    for (let i = 0; i < cleanCode.length; i++) {
-      safeSeed = (safeSeed << 5) - safeSeed + cleanCode.charCodeAt(i);
-      safeSeed |= 0;
-    }
-    this.seed = Math.abs(safeSeed) || 42;
+function ev(k, x, y, i, id, a) {
+  game.events.push({ k, x: R(x), y: R(y), i: +(i || 0).toFixed(2), id: id == null ? -1 : id, a: a == null ? -1 : a });
+}
 
-    this.players = new Map();
-    this.creatures = [];
-    this.phase = 'lobby';
-    this.tick = 0;
-    this.snapAcc = 0;
-    this.reset();
+/* ---------------- noise: the core mechanic ---------------- */
+function nearestAlive(x, y) {
+  let best = null, bd = Infinity;
+  for (const p of playersArr()) if (p.state === 'alive') {
+    const d = Math.hypot(p.x - x, p.y - y);
+    if (d < bd) { bd = d; best = p; }
   }
+  return best;
+}
 
-  reset() {
-    this.phase = 'lobby';
-    this.fuelDelivered = 0;
-    this.fuelTimer = FUEL_TIME;
-    this.escaped = 0;
-    this.startedAt = 0;
-    this.endsAt = 0;
-    this.spawnIndex = 0;
-    this.creatures = [];
+function hear(x, y, i, src) {
+  if (game.phase !== 'play' || game.roundT < GRACE) return;
+  const c = game.creature;
+  if (src && src.state === 'down') i *= 1.35;               // panic breath carries
+  const range = (90 + i * 250) * (c.state === 'hunt' ? 1.3 : 1);
+  const d = Math.hypot(c.x - x, c.y - y);
+  if (d > range || (i < 0.14 && d > 140)) return;
+  c.lastKnown = { x, y };
 
-    // Pick which fuel spots are live this run.
-    const spots = W.FUEL_SPOTS.slice();
-    for (let i = spots.length - 1; i > 0; i--) {
-      const j = Math.floor(W.hash(i, 3, this.seed) * (i + 1));
-      [spots[i], spots[j]] = [spots[j], spots[i]];
-    }
-    this.cans = spots.slice(0, CANS_REQUIRED).map(s => ({
-      id: s.id, x: s.x, z: s.z, y: W.heightAt(s.x, s.z, this.seed) + 0.35,
-      label: s.label, held: null, delivered: false,
-    }));
-
-    this.tower = { active: false, cooldown: 0 };
-    for (const p of this.players.values()) this.respawn(p);
-  }
-
-  begin() {
-    if (this.phase !== 'lobby') return;
-    this.phase = 'active';
-    this.startedAt = now();
-    const n = Math.max(1, Math.min(3, Math.ceil(this.alive().length / 3)));
-    for (let i = 0; i < n; i++) this.creatures.push(makeCreature(this.seed, i));
-    this.broadcast({ t: 'event', kind: 'begin', creatures: this.creatures.length });
-    this.log('Silence protocol active. Find ' + CANS_REQUIRED + ' fuel cans. Do not make a sound.');
-  }
-
-  respawn(p) {
-    const s = W.spawnPoint(this.seed, this.spawnIndex++);
-    p.x = s.x; p.z = s.z; p.y = s.y;
-    p.hp = 100; p.down = false; p.dead = false; p.downT = BLEED_TIME;
-    p.reviveP = 0; p.carrying = null; p.escapedAt = 0;
-  }
-
-  alive() { return [...this.players.values()].filter(p => !p.dead); }
-  active() { return [...this.players.values()].filter(p => !p.dead && !p.down && !p.escapedAt); }
-
-  log(text, tone = 'info') { this.broadcast({ t: 'event', kind: 'log', text, tone }); }
-
-  broadcast(msg, except) {
-    const s = JSON.stringify(msg);
-    for (const p of this.players.values()) if (p !== except && p.ws.readyState === 1) p.ws.send(s);
-  }
-
-  // ------------------------------------------------------------ noise input
-  onNoise(from, x, z, loud, kind) {
-    if (this.phase === 'lobby' || this.phase === 'over') return;
-    loud = W.clamp(loud, 0, 1);
-    if (loud < 0.015) return;
-
-    this.broadcast({ t: 'pulse', x, z, loud, kind, by: from ? from.id : null });
-
-    for (const c of this.creatures) {
-      if (c.state === ST.STUNNED) continue;
-      const g = hearing(c, x, z, loud);
-      if (g <= 0.004) continue;
-
-      // A louder, closer sound overrides a stale bearing.
-      const stale = (now() - c.lastHeard) / 1000;
-      if (g > c.attention * (0.55 + Math.min(0.4, stale * 0.06))) {
-        c.tx = x + rnd(-2, 2) * (1 - g);
-        c.tz = z + rnd(-2, 2) * (1 - g);
-        c.attention = Math.max(c.attention, g);
-        c.lastHeard = now();
-        c.idle = 0;
-
-        if (g > 0.52) {
-          if (c.state !== ST.CHARGE) this.screech(c, 1);
-          c.state = ST.CHARGE;
-        } else if (g > 0.16) {
-          c.state = ST.INVESTIGATE;
-        } else if (c.state === ST.PATROL) {
-          c.state = ST.STALK;
+  if (c.state === 'hunt') {
+    const tp = c.target;
+    const fromTarget = tp && !tp.gone && tp.state !== 'dead' &&
+      (tp === src || Math.hypot(tp.x - x, tp.y - y) < 320);
+    if (fromTarget) c.huntT = 0;
+    if (src && src.state === 'alive' && i >= 0.9) {          // louder voice wins its attention
+      if (!tp || tp === src || dist(c, src) < dist(c, tp)) {
+        if (c.target !== src) {
+          c.target = src; c.huntT = 0;
+          if (c.shriekCd <= 0) { ev('shriek', c.x, c.y, 2.4); c.shriekCd = 7; }
         }
       }
     }
+    return;
   }
-
-  screech(c, force) {
-    if (now() - c.screechAt < 3500 && !force) return;
-    c.screechAt = now();
-    this.broadcast({ t: 'event', kind: 'screech', x: c.x, y: c.y, z: c.z, id: c.id });
-  }
-
-  // ---------------------------------------------------------------- objects
-  tryPickup(p) {
-    if (p.carrying || p.down || p.dead) return;
-    for (const can of this.cans) {
-      if (can.delivered || can.held) continue;
-      if (dist2(p.x, p.z, can.x, can.z) < 3.5 * 3.5) {
-        can.held = p.id; p.carrying = can.id;
-        this.broadcast({ t: 'event', kind: 'log', tone: 'good', text: `${p.name} recovered a fuel can (${can.label}).` });
-        this.onNoise(p, p.x, p.z, 0.22, 'metal');
-        return;
-      }
+  c.goal = { x, y }; c.state = 'investigate';
+  if (i >= 1.25 || d < 170) {                                 // loud or close → straight to hunt
+    const near = nearestAlive(x, y);
+    if (near) {
+      c.target = near; c.state = 'hunt'; c.huntT = 0;
+      if (c.shriekCd <= 0) { ev('shriek', c.x, c.y, 2.4); c.shriekCd = 7; }
     }
-  }
-
-  tryDeliver(p) {
-    if (!p.carrying) return;
-    if (dist2(p.x, p.z, W.TRUCK.x, W.TRUCK.z) > 6 * 6) return;
-    const can = this.cans.find(c => c.id === p.carrying);
-    if (!can) return;
-    can.delivered = true; can.held = null; p.carrying = null;
-    this.fuelDelivered++;
-    this.onNoise(p, p.x, p.z, 0.30, 'metal');
-    this.log(`Fuel loaded — ${this.fuelDelivered}/${CANS_REQUIRED}.`, 'good');
-    if (this.fuelDelivered >= CANS_REQUIRED && this.phase === 'active') {
-      this.phase = 'fueling';
-      this.log('Truck is fueling. It is going to be loud. Stay near it and stay alive.', 'warn');
-      this.onNoise(null, W.TRUCK.x, W.TRUCK.z, 0.9, 'engine');
-    }
-  }
-
-  tryTower(p) {
-    if (this.tower.cooldown > 0 || dist2(p.x, p.z, 320, -780) > 8 * 8) return;
-    this.tower.cooldown = 150;
-    this.broadcast({ t: 'event', kind: 'feedback' });
-    this.log(`${p.name} pushed the transmitter to feedback. The creatures are screaming.`, 'good');
-    for (const c of this.creatures) {
-      c.state = ST.STUNNED;
-      c.stunUntil = now() + 20000;
-      c.attention = 0;
-    }
-  }
-
-  // ------------------------------------------------------------------- loop
-  step(dt) {
-    // fueling / extraction timers
-    if (this.phase === 'fueling') {
-      this.fuelTimer -= dt;
-      // The engine is a beacon. It draws everything.
-      if (Math.random() < dt * 1.4) this.onNoise(null, W.TRUCK.x, W.TRUCK.z, 0.55, 'engine');
-      if (this.fuelTimer <= 0) {
-        this.phase = 'extract';
-        this.log('Truck is running. Get in. Now.', 'good');
-      }
-    }
-
-    // players: bleed-out, escape check
-    for (const p of this.players.values()) {
-      if (p.down && !p.dead) {
-        p.downT -= dt;
-        if (Math.random() < dt * 0.5) this.onNoise(p, p.x, p.z, 0.10, 'gasp');
-        if (p.downT <= 0) {
-          p.dead = true; p.down = false;
-          if (p.carrying) this.dropCan(p);
-          this.log(`${p.name} bled out.`, 'bad');
-        }
-      }
-      if (this.phase === 'extract' && !p.escapedAt && !p.dead && !p.down) {
-        if (dist2(p.x, p.z, W.TRUCK.x, W.TRUCK.z) < 6 * 6) {
-          p.escapedAt = now(); this.escaped++;
-          this.log(`${p.name} made it into the truck.`, 'good');
-        }
-      }
-    }
-
-    if (this.tower.cooldown > 0) this.tower.cooldown -= dt;
-
-    // creatures
-    for (const c of this.creatures) this.stepCreature(c, dt);
-
-    // win / lose
-    if (this.phase !== 'lobby' && this.phase !== 'over') {
-      const survivors = this.alive();
-      if (survivors.length === 0) this.finish(false, 'Everyone is gone. It was listening the whole time.');
-      else if (this.phase === 'extract' && survivors.every(p => p.escapedAt || p.dead) && this.escaped > 0)
-        this.finish(true, `${this.escaped} survivor(s) drove out of the valley.`);
-    }
-  }
-
-  dropCan(p) {
-    const can = this.cans.find(c => c.id === p.carrying);
-    if (can) { can.held = null; can.x = p.x; can.z = p.z; can.y = W.heightAt(p.x, p.z, this.seed) + 0.35; }
-    p.carrying = null;
-  }
-
-  finish(won, text) {
-    this.phase = 'over';
-    this.endsAt = now() + 14000;
-    this.broadcast({ t: 'event', kind: 'over', won, text });
-  }
-
-  stepCreature(c, dt) {
-    if (c.state === ST.STUNNED) {
-      if (now() >= c.stunUntil) {
-        const p = walkableNear(c.x, c.z, this.seed);
-        c.state = ST.PATROL; c.tx = p.x; c.tz = p.z;
-      } else return;
-    }
-
-    c.attention *= Math.pow(0.72, dt);       // memory of the sound fades
-    const arrived = dist2(c.x, c.z, c.tx, c.tz) < 9;
-
-    if (c.attention < 0.05) {
-      if (c.state !== ST.PATROL) { c.state = ST.PATROL; c.idle = rnd(1, 4); }
-    } else if (c.state === ST.CHARGE && c.attention < 0.30) {
-      c.state = ST.INVESTIGATE;
-    }
-
-    if (arrived) {
-      if (c.state === ST.PATROL) {
-        if ((c.idle -= dt) <= 0) {
-          // Drift toward wherever people tend to be — roads and settlements.
-          const poi = W.POIS[Math.floor(Math.random() * W.POIS.length)];
-          const p = walkableNear(poi.x, poi.z, this.seed);
-          c.tx = p.x; c.tz = p.z; c.idle = rnd(2, 7);
-        }
-      } else {
-        // Lost the trail. Sweep the area, listening.
-        c.state = ST.STALK;
-        const p = walkableNear(c.tx, c.tz, this.seed, 16);
-        c.tx = p.x; c.tz = p.z;
-        c.attention *= 0.6;
-        if (Math.random() < 0.35) this.screech(c, 0);
-      }
-    }
-
-    // steer
-    const want = Math.atan2(c.tx - c.x, c.tz - c.z);
-    let d = ((want - c.yaw + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
-    const turn = (c.state === ST.CHARGE ? 4.2 : 2.4) * dt;
-    c.yaw += W.clamp(d, -turn, turn);
-
-    const target = SPEED[c.state] || 3;
-    c.speed += (target - c.speed) * Math.min(1, dt * 3.5);
-
-    let nx = c.x + Math.sin(c.yaw) * c.speed * dt;
-    let nz = c.z + Math.cos(c.yaw) * c.speed * dt;
-    if (!W.isWalkable(nx, nz, this.seed)) {
-      c.yaw += rnd(1.4, 2.6) * (Math.random() < 0.5 ? -1 : 1);
-      const p = walkableNear(c.x, c.z, this.seed);
-      c.tx = p.x; c.tz = p.z;
-    } else { c.x = nx; c.z = nz; }
-    c.y = W.heightAt(c.x, c.z, this.seed);
-
-    // contact
-    if (now() - c.lungeAt > 900) {
-      for (const p of this.players.values()) {
-        if (p.dead || p.escapedAt) continue;
-        const d2 = dist2(c.x, c.z, p.x, p.z);
-        const reach = c.state === ST.CHARGE ? 2.9 : 2.2;
-        if (d2 > reach * reach || Math.abs(c.y - p.y) > 4) continue;
-        c.lungeAt = now();
-        if (p.down) {
-          p.dead = true; p.down = false;
-          if (p.carrying) this.dropCan(p);
-          this.log(`${p.name} was taken.`, 'bad');
-        } else {
-          p.down = true; p.downT = BLEED_TIME; p.hp = 0; p.reviveP = 0;
-          if (p.carrying) this.dropCan(p);
-          this.log(`${p.name} is down. Reach them quietly.`, 'bad');
-        }
-        this.broadcast({ t: 'event', kind: 'hit', target: p.id, x: c.x, y: c.y, z: c.z });
-        this.screech(c, 1);
-        // It backs off after a strike, then re-listens.
-        c.attention = 0.35; c.state = ST.STALK;
-        const away = walkableNear(c.x - Math.sin(c.yaw) * 40, c.z - Math.cos(c.yaw) * 40, this.seed);
-        c.tx = away.x; c.tz = away.z;
-        break;
-      }
-    }
-  }
-
-  snapshot() {
-    return {
-      t: 'snap', now: now(), phase: this.phase,
-      fuel: this.fuelDelivered, need: CANS_REQUIRED,
-      fuelTimer: Math.max(0, Math.round(this.fuelTimer)),
-      towerCd: Math.max(0, Math.round(this.tower.cooldown)),
-      players: [...this.players.values()].map(p => ({
-        id: p.id, name: p.name, x: +p.x.toFixed(2), y: +p.y.toFixed(2), z: +p.z.toFixed(2),
-        yaw: +p.yaw.toFixed(2), st: p.stance, mic: p.mic | 0, down: p.down, dead: p.dead,
-        car: !!p.carrying, rev: +p.reviveP.toFixed(2), esc: !!p.escapedAt, sig: p.signal || 0,
-        light: !!p.light, downT: Math.round(p.downT),
-      })),
-      creatures: this.creatures.map(c => ({
-        id: c.id, x: +c.x.toFixed(2), y: +c.y.toFixed(2), z: +c.z.toFixed(2),
-        yaw: +c.yaw.toFixed(2), sp: +c.speed.toFixed(2), st: c.state,
-        att: +c.attention.toFixed(2), tx: +c.tx.toFixed(1), tz: +c.tz.toFixed(1),
-      })),
-      cans: this.cans.map(c => ({ id: c.id, x: c.x, y: c.y, z: c.z, held: c.held, del: c.delivered, label: c.label })),
-    };
   }
 }
 
-// ------------------------------------------------------------------- server
-const rooms = new Map();
-function getRoom(code) {
-  code = (code || 'QUIET').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) || 'QUIET';
-  if (!rooms.has(code)) rooms.set(code, new Room(code));
-  return rooms.get(code);
+function emitNoise(x, y, i, kind, src) {
+  ev('noise', x, y, i, src ? src.id : -1, kind);
+  hear(x, y, i, src || null);
 }
 
-const wss = new WebSocketServer({ server });
-let pid = 1;
+/* ---------------- players ---------------- */
+function spawnPos() {
+  const a = Math.random() * Math.PI * 2, r = 20 + Math.random() * 50;
+  return { x: game.world.spawn.x + Math.cos(a) * r, y: game.world.spawn.y + Math.sin(a) * r };
+}
 
-wss.on('connection', ws => {
-  let room = null, me = null;
+function respawn(p) {
+  const s = spawnPos();
+  Object.assign(p, { x: s.x, y: s.y, dir: -Math.PI / 2, state: 'alive', rv: 0, rvActive: false,
+                     fuse: null, rocks: 3, rockT: 0, stepAcc: 0, micCd: 0, pe: false, gait: 'walk' });
+}
 
-  ws.on('message', raw => {
-    let m; try { m = JSON.parse(raw); } catch { return; }
+function dropFuse(p) {
+  if (p.fuse == null) return;
+  const f = game.fuses.find(f => f.id === p.fuse);
+  if (f) { f.st = 'ground'; f.x = p.x; f.y = p.y; f.heldBy = null; }
+  p.fuse = null;
+}
 
-    if (m.t === 'join') {
-      if (me) return;
-      room = getRoom(m.room);
-      if (room.players.size >= MAX_PLAYERS) { ws.send(JSON.stringify({ t: 'full' })); return; }
-      me = {
-        ws, id: 'p' + (pid++), name: String(m.name || 'Survivor').slice(0, 16).replace(/[<>&]/g, ''),
-        x: 0, y: 0, z: 0, yaw: 0, stance: 'stand', mic: 0, hp: 100,
-        down: false, dead: false, downT: BLEED_TIME, reviveP: 0,
-        carrying: null, signal: 0, light: false, escapedAt: 0, lastNoise: 0,
-      };
-      room.respawn(me);
-      room.players.set(me.id, me);
-      ws.send(JSON.stringify({
-        t: 'welcome', you: me.id, seed: room.seed, room: room.code, phase: room.phase,
-        spawn: { x: me.x, y: me.y, z: me.z }, tick: TICK_HZ,
-      }));
-      room.log(`${me.name} joined. (${room.players.size}/${MAX_PLAYERS})`);
-      if (room.phase === 'lobby' && room.players.size >= 1) setTimeout(() => room.begin(), 4000);
+function downPlayer(p) {
+  p.state = 'down'; p.rv = 0;
+  ev('down', p.x, p.y, 0.9, p.id);
+  hear(p.x, p.y, 0.9, p);                                    // the scream carries
+}
+
+function killPlayer(p) {
+  p.state = 'dead'; dropFuse(p);
+  ev('dead', p.x, p.y, 0.6, p.id);
+}
+
+function movePlayer(p, dt) {
+  if (p.state === 'dead') return;
+  const inp = p.input;
+  let vx = (inp.r ? 1 : 0) - (inp.l ? 1 : 0);
+  let vy = (inp.d ? 1 : 0) - (inp.u ? 1 : 0);
+  if (!vx && !vy) { p.gait = 'idle'; return; }
+  const len = Math.hypot(vx, vy); vx /= len; vy /= len;
+  const gait = inp.sneak ? 'sneak' : (inp.run ? 'run' : 'walk');
+  p.gait = gait;
+  let spd = gait === 'run' ? 205 : gait === 'walk' ? 130 : 62;
+  if (p.state === 'down') spd = 30;
+  if (p.fuse != null && gait === 'run') spd = 170;
+  const res = WG.resolveCircle(p.x + vx * spd * dt, p.y + vy * spd * dt, WG.PR, solids(), game.world.trees, WG.SIZE);
+  const moved = Math.hypot(res.x - p.x, res.y - p.y);
+  p.x = res.x; p.y = res.y; p.dir = Math.atan2(vy, vx);
+  p.stepAcc += moved;
+  const stride = gait === 'run' ? 46 : gait === 'sneak' ? 30 : 36;
+  if (p.stepAcc >= stride) {
+    p.stepAcc = 0;
+    const i = p.state === 'down' ? 0.15 : gait === 'run' ? 1.1 : gait === 'walk' ? 0.42 : 0.1;
+    emitNoise(p.x, p.y, i, 'step', p);
+  }
+}
+
+function doorCenter(r) { return { x: r.x + r.w / 2, y: r.y + r.h / 2 }; }
+
+function interact(p) {
+  for (const f of game.fuses) if (f.st === 'ground' && dist(p, f) < 34) {
+    f.st = 'held'; f.heldBy = p.id; p.fuse = f.id;
+    ev('pickup', f.x, f.y, 0.4, p.id);
+    return;
+  }
+  if (p.fuse != null && dist(p, game.world.plaza) < 70) {
+    const f = game.fuses.find(f => f.id === p.fuse);
+    f.st = 'in'; p.fuse = null; game.genN++;
+    ev('install', game.world.plaza.x, game.world.plaza.y, 0.8, p.id);
+    emitNoise(game.world.plaza.x, game.world.plaza.y, 0.8, 'clank', p);
+    if (game.genN >= game.genTotal) { game.phase = 'won'; game.phaseT = 12; ev('win', game.world.plaza.x, game.world.plaza.y, 0); }
+    return;
+  }
+  let best = null, bd = 44 * 44;
+  for (const d of game.doors) {
+    const dd = dist(p, doorCenter(d.rect)) ** 2;
+    if (dd < bd) { bd = dd; best = d; }
+  }
+  if (best) {
+    best.open = !best.open; best.breachT = 0; game.solidsDirty = true;
+    const c = doorCenter(best.rect);
+    ev('door', c.x, c.y, best.open ? 1.0 : 0.45, p.id);
+    emitNoise(c.x, c.y, best.open ? 1.0 : 0.45, 'door', p);
+  }
+}
+
+function reviveHold(p, dt) {
+  if (p.state !== 'alive') return;
+  for (const q of playersArr()) {
+    if (q !== p && q.state === 'down' && dist(p, q) < 48) {
+      q.rv = Math.min(1, q.rv + dt / 3.2); q.rvActive = true;
+      if (q.rv >= 1) { q.state = 'alive'; q.rv = 0; ev('revive', q.x, q.y, 0.4, q.id, p.id); }
       return;
     }
-
-    if (!me || !room) return;
-
-    switch (m.t) {
-      case 'state':
-        if (typeof m.x === 'number') { me.x = m.x; me.y = m.y; me.z = m.z; }
-        me.yaw = m.yaw || 0;
-        me.stance = m.st || 'stand';
-        me.mic = m.mic || 0;
-        me.light = !!m.light;
-        break;
-
-      case 'noise': {
-        // Rate limit so a hot mic can't flood the sim.
-        if (now() - me.lastNoise < 60) break;
-        me.lastNoise = now();
-        room.onNoise(me, m.x ?? me.x, m.z ?? me.z, m.loud, m.kind || 'mic');
-        break;
-      }
-
-      case 'act':
-        if (m.a === 'pickup') room.tryPickup(me);
-        else if (m.a === 'deliver') room.tryDeliver(me);
-        else if (m.a === 'tower') room.tryTower(me);
-        else if (m.a === 'drop' && me.carrying) room.dropCan(me);
-        break;
-
-      case 'revive': {
-        const t = room.players.get(m.id);
-        if (!t || !t.down || t.dead || me.down || me.dead) break;
-        if (dist2(me.x, me.z, t.x, t.z) > 3 * 3) break;
-        t.reviveP += (m.dt || 0.05) / REVIVE_TIME;
-        if (Math.random() < 0.10) room.onNoise(me, me.x, me.z, 0.13, 'cloth');
-        if (t.reviveP >= 1) {
-          t.down = false; t.reviveP = 0; t.hp = 55; t.downT = BLEED_TIME;
-          room.log(`${me.name} got ${t.name} back on their feet.`, 'good');
-        }
-        break;
-      }
-
-      case 'signal':
-        me.signal = m.id | 0;
-        room.broadcast({ t: 'event', kind: 'signal', by: me.id, name: me.name, id: me.signal });
-        setTimeout(() => { if (me.signal === (m.id | 0)) me.signal = 0; }, 2500);
-        break;
-
-      case 'chat':
-        room.broadcast({ t: 'event', kind: 'chat', name: me.name, text: String(m.text || '').slice(0, 140) });
-        break;
-    }
-  });
-
-  ws.on('close', () => {
-    if (!room || !me) return;
-    if (me.carrying) room.dropCan(me);
-    room.players.delete(me.id);
-    room.log(`${me.name} disconnected.`);
-    if (room.players.size === 0) rooms.delete(room.code);
-  });
-});
-
-// global clock
-let last = now();
-setInterval(() => {
-  const t = now(), dt = Math.min(0.25, (t - last) / 1000); last = t;
-  for (const room of rooms.values()) {
-    if (room.phase !== 'lobby') room.step(dt);
-    if (room.phase === 'over' && t > room.endsAt) room.reset();
-    room.snapAcc += dt;
-    if (room.snapAcc >= 1 / SNAP_HZ) { room.snapAcc = 0; room.broadcast(room.snapshot()); }
   }
-}, 1000 / TICK_HZ);
+}
 
-server.listen(PORT, HOST, () => {
-  console.log(`\n  A QUIET PLACE — listening on http://${HOST}:${PORT}\n  Microphone requires localhost or HTTPS.\n`);
-});
+/* ---------------- creature ---------------- */
+function routeViaDoor(c, goal) {
+  const bGoal = buildingAt(goal), bC = buildingAt(c);
+  const need = (bGoal && bGoal !== bC) ? bGoal : (!bGoal && bC ? bC : null);
+  if (!need) return goal;
+  let best = null, bd = Infinity;
+  for (const d of game.doors) {
+    if (d.rect.b !== need.i) continue;
+    const cc = doorCenter(d.rect), dd = dist(c, cc);
+    if (dd < bd) { bd = dd; best = cc; }
+  }
+  if (best && bd > 30) return best;
+  return goal;
+}
+
+function attackCheck(dt) {
+  const c = game.creature;
+  for (const p of playersArr()) {
+    if (p.state === 'down' && dist(p, c) < 24) {
+      c.execT += dt; c.pauseT = Math.max(c.pauseT, 0.06);
+      if (c.execT > 0.9) { killPlayer(p); c.execT = 0; c.pauseT = 1.3; }
+      return;
+    }
+  }
+  c.execT = 0;
+  if (c.attackCd > 0) return;
+  for (const p of playersArr()) {
+    if (p.state === 'alive' && dist(p, c) < 26) {
+      downPlayer(p); c.attackCd = 1.7; c.pauseT = 0.8; return;
+    }
+  }
+}
+
+function updateCreature(dt) {
+  const c = game.creature;
+  c.attackCd = Math.max(0, c.attackCd - dt);
+  c.shriekCd = Math.max(0, c.shriekCd - dt);
+  if (game.phase !== 'play' || c.pauseT > 0) { c.pauseT -= dt; return; }
+
+  c.senseT -= dt;                                            // it hears heartbeats up close
+  if (c.senseT <= 0) {
+    c.senseT = 0.55;
+    for (const p of playersArr()) if (p.state === 'alive' && dist(p, c) < 70) { hear(p.x, p.y, 0.32, p); break; }
+  }
+
+  switch (c.state) {
+    case 'roam':
+      if (c.idleT > 0) { c.idleT -= dt; c.goal = null; break; }
+      if (!c.goal || dist(c, c.goal) < 24) {
+        if (Math.random() < 0.4) { c.idleT = 0.8 + Math.random() * 1.8; c.goal = null; }
+        else {
+          const wp = game.world.waypoints[(Math.random() * game.world.waypoints.length) | 0];
+          c.goal = { x: wp.x, y: wp.y };
+        }
+      }
+      break;
+    case 'investigate':
+      if (!c.goal) { c.state = 'roam'; break; }
+      if (dist(c, c.goal) < 22) {
+        c.state = 'search'; c.searchT = 4.5; c.subT = 0;
+        c.searchC = { x: c.goal.x, y: c.goal.y }; c.goal = null;
+      }
+      break;
+    case 'search':
+      c.searchT -= dt; c.subT -= dt;
+      if (c.searchT <= 0) { c.state = 'roam'; c.goal = null; break; }
+      if (c.subT <= 0) {
+        c.subT = 1.1;
+        const a = Math.random() * Math.PI * 2, rr = 40 + Math.random() * 130;
+        c.goal = { x: c.searchC.x + Math.cos(a) * rr, y: c.searchC.y + Math.sin(a) * rr };
+      }
+      break;
+    case 'hunt': {
+      const tp = c.target;
+      if (!tp || tp.gone || tp.state === 'dead') {
+        c.state = 'search'; c.searchC = c.lastKnown || { x: c.x, y: c.y }; c.searchT = 4; c.target = null; break;
+      }
+      c.huntT += dt;
+      if (c.huntT > 2.6 && dist(tp, c) > 230) {
+        c.state = 'search'; c.searchC = { x: tp.x, y: tp.y }; c.searchT = 5; c.target = null; break;
+      }
+      c.goal = { x: tp.x, y: tp.y };
+      break;
+    }
+  }
+
+  attackCheck(dt);
+
+  /* move with wall-slide, detours and door breaching */
+  let goal = c.state === 'hunt' && c.target ? c.goal : (c.goal || null);
+  if (goal) {
+    goal = routeViaDoor(c, goal);
+    const d = dist(c, goal) || 1;
+    let dirx = (goal.x - c.x) / d, diry = (goal.y - c.y) / d;
+    if (c.detourT > 0) {
+      c.detourT -= dt;
+      const a = Math.atan2(diry, dirx) + c.detourSign * 1.1;
+      dirx = Math.cos(a); diry = Math.sin(a);
+    }
+    const spd = SPEEDS[c.state] || 50;
+    const res = WG.resolveCircle(c.x + dirx * spd * dt, c.y + diry * spd * dt, WG.CR, solids(), game.world.trees, WG.SIZE);
+    const moved = Math.hypot(res.x - c.x, res.y - c.y);
+    c.x = res.x; c.y = res.y; c.dir = Math.atan2(diry, dirx);
+
+    if (moved < spd * dt * 0.3 && spd > 10) {
+      const doorHit = res.hits.find(h => h.door && !h.door.open);
+      if (doorHit && c.state !== 'roam') {                  // IT BREAKS THROUGH
+        doorHit.door.breachT += dt;
+        if (doorHit.door.breachT > 0.9) {
+          doorHit.door.open = true; doorHit.door.breachT = 0; game.solidsDirty = true;
+          const dc = doorCenter(doorHit.door.rect);
+          ev('breach', dc.x, dc.y, 2.2);
+          emitNoise(dc.x, dc.y, 2.2, 'breach', null);
+        }
+      } else {
+        c.stuckT += dt;
+        if (c.stuckT > 0.35) { c.stuckT = 0; c.detourT = 0.7; c.detourSign = Math.random() < 0.5 ? 1 : -1; }
+      }
+    } else c.stuckT = 0;
+  }
+}
+
+/* ---------------- projectiles (thrown stones) ---------------- */
+function updateRocks(dt) {
+  for (let i = game.rocksAir.length - 1; i >= 0; i--) {
+    const r = game.rocksAir[i];
+    r.x += r.vx * dt; r.y += r.vy * dt;
+    r.vx *= (1 - 2.2 * dt); r.vy *= (1 - 2.2 * dt);
+    r.life -= dt;
+    const res = WG.resolveCircle(r.x, r.y, 3, solids(), game.world.trees, WG.SIZE);
+    const blocked = res.hits.length > 0;
+    if (blocked) { r.x = res.x; r.y = res.y; r.life = Math.min(r.life, 0.05); }
+    if (r.life <= 0) {
+      emitNoise(r.x, r.y, 1.6, 'land', null);                // the decoy lands loud
+      game.rocksAir.splice(i, 1);
+    }
+  }
+}
+
+/* ---------------- round flow ---------------- */
+function resetRound() {
+  game = makeGame();
+  for (const p of playersArr()) respawn(p);
+  sendAll({ t: 'reset', seed: game.seed, world: game.world });
+}
+
+function broadcast() {
+  const c = game.creature;
+  const msg = {
+    t: 'state', ph: game.phase, pt: Math.ceil(Math.max(0, game.phaseT)),
+    gr: Math.max(0, Math.ceil(GRACE - game.roundT)),
+    c: { x: R(c.x), y: R(c.y), d: +c.dir.toFixed(2), s: c.state, tg: c.target ? c.target.id : -1 },
+    p: playersArr().map(p => ({
+      id: p.id, x: R(p.x), y: R(p.y), d: +p.dir.toFixed(2),
+      s: p.state === 'alive' ? 0 : p.state === 'down' ? 1 : 2,
+      f: p.fuse != null ? 1 : 0, r: p.rocks, rv: +p.rv.toFixed(2), g: GAITS[p.gait] || 0
+    })),
+    fu: game.fuses.map(f => f.st === 'ground' ? [f.id, R(f.x), R(f.y)] : f.st === 'held' ? [f.id, 'h'] : [f.id, 'i']),
+    dn: game.doors.map(d => d.open ? 1 : 0),
+    gn: game.genN, gt: game.genTotal,
+    ev: game.events.splice(0)
+  };
+  const s = JSON.stringify(msg);
+  for (const ws of players.keys()) if (ws.readyState === 1) ws.send(s);
+}
+function sendAll(msg) { const s = JSON.stringify(msg); for (const ws of players.keys()) if (ws.readyState === 1) ws.send(s); }
+
+/* ---------------- tick ---------------- */
+let tickN = 0;
+setInterval(() => {
+  const dt = TICK;
+  game.time += dt; game.roundT += dt;
+
+  if (game.phase === 'play') {
+    for (const p of playersArr()) p.rvActive = false;
+    for (const p of playersArr()) {
+      if (p.gone) continue;
+      const edge = p.input.e && !p.pe; p.pe = p.input.e;
+      movePlayer(p, dt);
+      if (edge && p.state !== 'dead') interact(p);
+      if (p.input.e) reviveHold(p, dt);
+      if (p.rocks < 3) { p.rockT += dt; if (p.rockT >= 22) { p.rockT = 0; p.rocks++; } }
+    }
+    for (const p of playersArr()) if (p.state === 'down' && !p.rvActive) p.rv = Math.max(0, p.rv - dt * 0.08);
+    updateRocks(dt);
+    updateCreature(dt);
+    const ps = playersArr();
+    if (ps.length && ps.every(p => p.state === 'dead')) {
+      game.phase = 'lost'; game.phaseT = 10; ev('lose', 0, 0, 0);
+    }
+  } else {
+    game.phaseT -= dt;
+    if (game.phaseT <= 0) resetRound();
+  }
+
+  if (++tickN % BCAST_EVERY === 0) broadcast();
+}, TICK * 1000);
+
+/* ---------------- websocket ---------------- */
+const wss = new WebSocketServer({ server: http.createServer ? undefined : undefined, noServer: true });
+const httpSrv = http.createServer ? null : null; // placeholder to keep linters quiet
+/* attach to a real server: */
+const srv = require('http').createServer();
+wss.attach ? 0 : 0;
