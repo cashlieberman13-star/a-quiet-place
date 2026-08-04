@@ -1,13 +1,10 @@
 {
-  "name": "a-quiet-place-horror",
+  "name": "a-quiet-place",
   "version": "1.0.0",
-  "type": "module",
+  "private": true,
+  "description": "Co-op sound-horror. The creature is blind. Your real microphone is the threat vector. Zero art/audio assets — everything is generated in code.",
   "main": "server.js",
-  "scripts": {
-    "start": "node server.js"
-  },
-  "dependencies": {
-    "three": "^0.160.0",
-    "ws": "^8.16.0"
-  }
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=16" },
+  "dependencies": { "ws": "^8.16.0" }
 }
