@@ -1105,7 +1105,6 @@ class Game {
 
     this.clock = new THREE.Clock();
     this.raycaster = new THREE.Raycaster();
-    this.loop = this.loop.bind(this);
   }
 
   // ------------------------------------------------------------------ input
