@@ -1521,7 +1521,11 @@ class Game {
 // Remove immediate auto-initialization to stop early crashes
 // Remove immediate auto-initialization to stop early crashes
 window.addEventListener('DOMContentLoaded', () => {
-  console.log("DOM loaded. Awaiting user interaction to initialize Game configuration.");
+  // Let your class handle setting up event listeners for #btnMic and #btnPlay natively
+  const config = window.QPConfig || {};
+  window.currentGameInstance = new Game(config);
+  console.log("A Quiet Place — Web Engine successfully bound to DOM UI targets.");
 });
+
 
 
