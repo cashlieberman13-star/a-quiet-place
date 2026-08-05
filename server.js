@@ -131,6 +131,7 @@ function movePlayer(rm, p, dt) {
   p.gait = gait;
   let spd = gait === 'run' ? 5.2 : gait === 'walk' ? 2.2 : 1.1;
   if (p.state === 'down') spd = 0.5;
+  if (p.state === 'hurt') spd *= 0.8;
   if (p.fuse != null && gait === 'run') spd = 4.4;
   const res = WG.resolveCircle(p.x + vx * spd * dt, p.z + vz * spd * dt, WG.PR, solids(rm), g.world.trees, WG.SIZE);
   const moved = Math.hypot(res.x - p.x, res.z - p.z);
@@ -170,12 +171,16 @@ function interact(rm, p) {
     emitNoise(rm, c.x, c.z, best.open ? 1.0 : 0.45, 'door', p);
   }
 }
-function reviveHold(rm, p, dt) {
-  if (p.state !== 'alive') return;
-  for (const q of pArr(rm)) if (q !== p && q.state === 'down' && dist(p, q) < 2) {
-    q.rv = Math.min(1, q.rv + dt / 3.2); q.rvActive = true;
-    if (q.rv >= 1) { q.state = 'alive'; q.rv = 0; ev(rm, 'revive', q.x, q.z, 0.4, q.id, p.id); }
-    return;
+function careHold(rm, p, dt) {
+  if (p.state === 'alive') {
+    for (const q of pArr(rm)) if (q !== p && (q.state === 'down' || q.state === 'hurt') && dist(p, q) < 2) {
+      q.rv = Math.min(1, q.rv + dt / (q.state === 'down' ? 3.2 : 2)); q.rvActive = true;
+      if (q.rv >= 1) { const was = q.state; q.state = 'alive'; q.rv = 0; ev(rm, was === 'down' ? 'revive' : 'heal', q.x, q.z, 0.4, q.id, p.id); }
+      return;
+    }
+  } else if (p.state === 'hurt' && p.input.e) {
+    p.rv = Math.min(1, p.rv + dt / 4); p.rvActive = true;
+    if (p.rv >= 1) { p.state = 'alive'; p.rv = 0; ev(rm, 'heal', p.x, p.z, 0.4, p.id, p.id); }
   }
 }
 
@@ -200,7 +205,12 @@ function attackCheck(rm, dt) {
   }
   c.execT = 0;
   if (c.attackCd > 0) return;
-  for (const p of pArr(rm)) if (p.state === 'alive' && dist(p, c) < 1.1) { downPlayer(rm, p); c.attackCd = 1.7; c.pauseT = 0.8; return; }
+  for (const p of pArr(rm)) if ((p.state === 'alive' || p.state === 'hurt') && dist(p, c) < 1.1) {
+    if (p.state === 'alive') { p.state = 'hurt'; p.rv = 0; ev(rm, 'hit', p.x, p.z, 0.9, p.id); hear(rm, p.x, p.z, 0.9, p); }
+    else { p.state = 'down'; p.rv = 0; ev(rm, 'down', p.x, p.z, 0.9, p.id); hear(rm, p.x, p.z, 0.9, p); }
+    c.attackCd = 1.7; c.pauseT = 0.8;
+    return;
+  }
 }
 function updateCreature(rm, dt) {
   const g = rm.game, c = g.creature;
@@ -233,6 +243,8 @@ function updateCreature(rm, dt) {
       c.huntT += dt;
       if (c.huntT > 3 && dist(tp, c) > 9) { c.state = 'search'; c.searchC = { x: tp.x, z: tp.z }; c.searchT = 5; c.target = null; break; }
       c.goal = { x: tp.x, z: tp.z };
+            c.roarT = (c.roarT || 0) - dt;
+      if (c.roarT <= 0) { c.roarT = 5 + Math.random() * 4; ev(rm, 'roar', c.x, c.z, 2.6); }
       break;
     }
   }
@@ -284,7 +296,7 @@ function broadcast(rm) {
     cyc: { c: g.cyc, t: Math.ceil(g.cycT) },
     c: { x: R(c.x), z: R(c.z), d: +c.dir.toFixed(2), s: c.state, tg: c.target ? c.target.id : -1, m: c.moving ? 1 : 0 },
     p: pArr(rm).map(p => ({ id: p.id, x: R(p.x), z: R(p.z), d: +p.dir.toFixed(2),
-      s: p.state === 'alive' ? 0 : p.state === 'down' ? 1 : 2, f: p.fuse != null ? 1 : 0, r: p.rocks,
+            s: p.state === 'alive' ? 0 : p.state === 'hurt' ? 1 : p.state === 'down' ? 2 : 3, f: p.fuse != null ? 1 : 0, r: p.rocks,
       rv: +p.rv.toFixed(2), g: GAITS[p.gait] || 0, l: p.input.f ? 1 : 0 })),
     fu: g.fuses.map(f => f.st === 'ground' ? [f.id, R(f.x), R(f.z)] : f.st === 'held' ? [f.id, 'h'] : [f.id, 'i']),
     dn: g.doors.map(d => d.open ? 1 : 0), gn: g.genN, gt: g.genTotal, ev: g.events.splice(0)
@@ -305,13 +317,13 @@ function tick(rm) {
       const edge = p.input.e && !p.pe; p.pe = p.input.e;
       movePlayer(rm, p, dt);
       if (edge && p.state !== 'dead') interact(rm, p);
-      if (p.input.e) reviveHold(rm, p, dt);
+      if (p.input.e || p.state === 'hurt') careHold(rm, p, dt);
       if (p.rocks < 3) { p.rockT += dt; if (p.rockT >= 22) { p.rockT = 0; p.rocks++; } }
     }
-    for (const p of pArr(rm)) if (p.state === 'down' && !p.rvActive) p.rv = Math.max(0, p.rv - dt * 0.08);
+    for (const p of pArr(rm)) if ((p.state === 'down' || p.state === 'hurt') && !p.rvActive) p.rv = Math.max(0, p.rv - dt * 0.08);
     updateRocks(rm, dt); updateCreature(rm, dt);
     const ps = pArr(rm);
-    if (ps.length && ps.every(p => p.state === 'dead')) { g.phase = 'lost'; g.phaseT = 10; ev(rm, 'lose', 0, 0, 0); }
+        if (ps.length && ps.every(p => p.state === 'down' || p.state === 'dead')) { g.phase = 'lost'; g.phaseT = 30; ev(rm, 'lose', 0, 0, 0); }
   } else { g.phaseT -= dt; if (g.phaseT <= 0) resetRound(rm); }
   if (++rm.tickN % BCAST_EVERY === 0) broadcast(rm);
 }
