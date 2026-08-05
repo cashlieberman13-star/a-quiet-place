@@ -1,6 +1,5 @@
 'use strict';
-/* A QUIET PLACE v3 — realistic pass: textures, ACES, black fog, volumetric flashlight,
-   grass wind sway, villages/plane landmarks, jumpscares, 2-hit, auto-quality. */
+/* A QUIET PLACE v3.1 — complete client. */
 const WG = window.WorldGen;
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
@@ -33,17 +32,17 @@ let dayF = 0;
 /* auto quality */
 let qLevel = 2, qAcc = 0, qN = 0, qT = 0, GRASS_R = 2;
 function applyQuality() {
+  if (!renderer) return;
   if (qLevel === 2) { renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 1.5)); renderer.shadowMap.enabled = true; GRASS_R = 2; }
   else if (qLevel === 1) { renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 1.25)); renderer.shadowMap.enabled = true; GRASS_R = 2; }
   else { renderer.setPixelRatio(1); renderer.shadowMap.enabled = false; GRASS_R = 1; }
 }
 
-/* ================= textures (all procedural) ================= */
+/* ================= textures ================= */
 const TEX = {};
 function cnv(w, h) { const c = document.createElement('canvas'); c.width = w; c.height = h || w; return c; }
 function srgb(t) { t.encoding = THREE.sRGBEncoding; return t; }
 function buildTextures() {
-  // grass blade cluster (alpha tested)
   {
     const c = cnv(128), g = c.getContext('2d');
     g.clearRect(0, 0, 128, 128);
@@ -56,7 +55,6 @@ function buildTextures() {
     }
     TEX.grass = srgb(new THREE.CanvasTexture(c));
   }
-  // brick
   {
     const c = cnv(256), g = c.getContext('2d');
     g.fillStyle = '#57493c'; g.fillRect(0, 0, 256, 256);
@@ -70,7 +68,6 @@ function buildTextures() {
     g.globalAlpha = 1;
     TEX.brick = srgb(new THREE.CanvasTexture(c)); TEX.brick.wrapS = TEX.brick.wrapT = THREE.RepeatWrapping;
   }
-  // shingles
   {
     const c = cnv(128), g = c.getContext('2d');
     g.fillStyle = '#2b2b2e'; g.fillRect(0, 0, 128, 128);
@@ -80,7 +77,6 @@ function buildTextures() {
     }
     TEX.roof = srgb(new THREE.CanvasTexture(c)); TEX.roof.wrapS = TEX.roof.wrapT = THREE.RepeatWrapping;
   }
-  // scratched metal
   {
     const c = cnv(256), g = c.getContext('2d');
     g.fillStyle = '#767d80'; g.fillRect(0, 0, 256, 256);
@@ -300,12 +296,20 @@ function vcFrame() {
 }
 
 /* ================= net ================= */
+let connTries = 0;
 function connect() {
   if (NET.ws && (NET.ws.readyState === 0 || NET.ws.readyState === 1)) return;
   const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
   NET.ws = new WebSocket(url);
-  NET.ws.onopen = () => { NET.open = true; NET.send({ t: 'join', name: myName, room: joinRoom }); };
-  NET.ws.onclose = () => { NET.open = false; if (NET.wasInGame) { banner('SIGNAL LOST — RECONNECTING', true); setTimeout(connect, 1600); } };
+  NET.ws.onopen = () => { NET.open = true; connTries = 0; NET.send({ t: 'join', name: myName, room: joinRoom }); };
+  NET.ws.onclose = () => {
+    NET.open = false;
+    connTries++;
+    if (NET.wasInGame) banner('SIGNAL LOST — RECONNECTING', true);
+    else if (!$('miccheck').classList.contains('hidden'))
+      $('mcStatus').textContent = 'SERVER UNREACHABLE — RETRY ' + connTries + '… CHECK RENDER DEPLOY IS LIVE';
+    setTimeout(connect, Math.min(8000, 1200 * connTries));
+  };
   NET.ws.onmessage = e => onMsg(JSON.parse(e.data));
 }
 function onMsg(m) {
@@ -401,7 +405,7 @@ function rebuildSolids() {
 function clientSolids() { return solidsCache || (rebuildSolids(), solidsCache); }
 function mergeGeoms(geoms) {
   geoms = geoms.map(g => {
-    if (g.index === null || g.index === undefined) {   // ExtrudeGeometry is non-indexed
+    if (g.index === null || g.index === undefined) {
       const n = g.attributes.position.count;
       const arr = new Uint32Array(n);
       for (let i = 0; i < n; i++) arr[i] = i;
@@ -436,6 +440,7 @@ function roofGeo(w, h, d) {
   g.translate(0, 0, -d / 2);
   return g;
 }
+function rnd01(n) { const x = Math.sin(n * 127.1) * 43758.5453; return x - Math.floor(x); }
 function groundTexture() {
   const S = 2048, c = cnv(S), g = c.getContext('2d'), rnd = WG.mulberry32(WORLD.seed ^ 0x77aa);
   const sc = S / WG.SIZE;
@@ -446,12 +451,10 @@ function groundTexture() {
     g.fillRect(rnd() * S, rnd() * S, 1 + rnd() * 3, 1 + rnd() * 3);
   }
   g.globalAlpha = 1;
-  // forest floor darkening
   for (let i = 0; i < 9000; i++) {
     const x = rnd() * WG.SIZE, z = rnd() * WG.SIZE;
     if (WG.forestN(x, z, WORLD.fOff) > 0.55) { g.fillStyle = 'rgba(14,20,10,.5)'; g.fillRect(x * sc, z * sc, 3, 3); }
   }
-  // roads
   g.strokeStyle = '#565a58'; g.lineCap = 'round'; g.lineWidth = 8 * sc;
   g.beginPath();
   for (let z = 0; z <= WG.SIZE; z += 8) { const x = WG.roadX(z); z === 0 ? g.moveTo(x * sc, z * sc) : g.lineTo(x * sc, z * sc); }
@@ -461,16 +464,13 @@ function groundTexture() {
   g.stroke();
   g.strokeStyle = 'rgba(30,30,30,.5)'; g.lineWidth = 1.2 * sc;
   for (let i = 0; i < 60; i++) { const z = rnd() * WG.SIZE, x = WG.roadX(z); g.beginPath(); g.moveTo(x * sc - 10, z * sc); g.lineTo(x * sc + 10, (z + 6) * sc); g.stroke(); }
-  // dirt paths: villages & plane to nearest road
-  g.strokeStyle = '#5d584a'; g.lineWidth = 2.6 * sc; g.setLineDash([]);
+  g.strokeStyle = '#5d584a'; g.lineWidth = 2.6 * sc;
   const path = (x1, z1, x2, z2) => { g.beginPath(); g.moveTo(x1 * sc, z1 * sc); g.quadraticCurveTo(((x1 + x2) / 2 + 20) * sc, ((z1 + z2) / 2) * sc, x2 * sc, z2 * sc); g.stroke(); };
   WORLD.villages.forEach(v => path(v.x, v.z, WG.roadX(v.z), v.z));
   if (WORLD.plane) path(WORLD.plane.x, WORLD.plane.z, WORLD.plane.x, WG.roadZ(WORLD.plane.x));
-  // plaza + village squares
   const dirt = (x, z, r) => { const rg = g.createRadialGradient(x * sc, z * sc, 2, x * sc, z * sc, r * sc); rg.addColorStop(0, '#6b6455'); rg.addColorStop(1, 'rgba(107,100,85,0)'); g.fillStyle = rg; g.beginPath(); g.arc(x * sc, z * sc, r * sc, 0, 7); g.fill(); };
   dirt(WORLD.plaza.x, WORLD.plaza.z, 40);
   WORLD.villages.forEach(v => dirt(v.x, v.z, 26));
-  // plane scorch
   if (WORLD.plane) { const p = WORLD.plane; const rg = g.createRadialGradient(p.x * sc, p.z * sc, 2, p.x * sc, p.z * sc, 26 * sc); rg.addColorStop(0, 'rgba(8,8,8,.9)'); rg.addColorStop(1, 'rgba(8,8,8,0)'); g.fillStyle = rg; g.beginPath(); g.arc(p.x * sc, p.z * sc, 26 * sc, 0, 7); g.fill(); }
   g.fillStyle = '#4a443c';
   for (const b of WORLD.buildings) g.fillRect(b.x * sc, b.z * sc, b.w * sc, b.h * sc);
@@ -500,7 +500,7 @@ function buildWorld3D() {
     const rg = roofGeo(b.w + 0.7, 1.5, b.h + 0.7);
     rg.translate(b.x + b.w / 2, y + WH, b.z + b.h / 2);
     roofParts.push(rg);
-    if (rnd01(b.x) < 0.5) wallParts.push(boxAt(b.x + b.w * 0.3, y + WH + 0.7, b.z + b.h * 0.3, 0.5, 1.4, 0.5)); // chimney
+    if (rnd01(b.x) < 0.5) wallParts.push(boxAt(b.x + b.w * 0.3, y + WH + 0.7, b.z + b.h * 0.3, 0.5, 1.4, 0.5));
   }
   houseMesh = new THREE.Mesh(mergeGeoms(wallParts), new THREE.MeshLambertMaterial({ map: TEX.brick }));
   houseMesh.castShadow = true; houseMesh.receiveShadow = true;
@@ -518,7 +518,7 @@ function buildWorld3D() {
     const hx = horiz ? dr.x : dr.x + dr.w / 2;
     const hz = horiz ? dr.z + dr.h / 2 : dr.z;
     m.position.set(hx, WG.height(hx, hz), hz);
-    m.rotation.y = (horiz ? 0 : Math.PI / 2) + (rnd01(dr.x) < 0.3 ? 0.5 : 0); // some hang ajar
+    m.rotation.y = (horiz ? 0 : Math.PI / 2) + (rnd01(dr.x) < 0.3 ? 0.5 : 0);
     m.castShadow = true;
     scene.add(m);
     return m;
@@ -549,7 +549,6 @@ function buildWorld3D() {
   if (treeCans.instanceColor) treeCans.instanceColor.needsUpdate = true;
   scene.add(treeTrunks, treeCans);
 
-  /* crashed plane */
   if (WORLD.plane) {
     const p = WORLD.plane, y = WG.height(p.x, p.z);
     const parts = [];
@@ -598,7 +597,6 @@ function buildWorld3D() {
   buildCreature3D();
   buildSky();
 }
-function rnd01(n) { const x = Math.sin(n * 127.1) * 43758.5453; return x - Math.floor(x); }
 function buildSky() {
   const sg = new THREE.BufferGeometry();
   const pos = new Float32Array(900 * 3);
@@ -674,6 +672,11 @@ function disposePlayer(id) { const o = playerObjs.get(id); if (o) { scene.remove
 function initWorld(world) {
   if (scene) {
     scene.clear();
+    /* THE FIX: scene.clear() removed the camera + lights. Re-attach them. */
+    scene.add(camera);
+    scene.add(hemi);
+    scene.add(sun);
+    scene.add(sun.target);
     grassChunks.forEach(m => m.geometry.dispose());
     grassChunks.clear();
     playerObjs.clear(); fuseMeshes.clear(); ringPool.length = 0; pebbleMeshes.length = 0;
@@ -687,7 +690,8 @@ function initWorld(world) {
   roster.forEach((r, id) => makePlayerObj(id));
 }
 
-/* grass with wind sway shader */
+/* grass */
+const grassTimeUniforms = [];
 function grassMaterial() {
   const m = new THREE.MeshLambertMaterial({ map: TEX.grass, alphaTest: 0.45, side: THREE.DoubleSide });
   m.onBeforeCompile = sh => {
@@ -703,7 +707,6 @@ function grassMaterial() {
   };
   return m;
 }
-const grassTimeUniforms = [];
 function ensureGrass() {
   const CS = 60;
   const cx = Math.floor(local.x / CS), cz = Math.floor(local.z / CS);
@@ -746,13 +749,13 @@ function threeInit() {
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.15;
   scene = new THREE.Scene();
-  scene.fog = new THREE.FogExp2(0x000000, 0.024);   // black night fog the flashlight cuts
+  scene.fog = new THREE.FogExp2(0x000000, 0.024);
   camera = new THREE.PerspectiveCamera(72, 1, 0.08, 460);
   camera.rotation.order = 'YXZ';
   scene.add(camera);
   hemi = new THREE.HemisphereLight(0x24304a, 0x101508, 0.12);
   scene.add(hemi);
-  sun = new THREE.DirectionalLight(0x8899bb, 0.06);
+  sun = new THREE.DirectionalLight(0x8899bb, 0.12);
   sun.castShadow = true;
   sun.shadow.mapSize.set(1024, 1024);
   const sc = sun.shadow.camera;
@@ -760,14 +763,13 @@ function threeInit() {
   sc.updateProjectionMatrix();
   sun.shadow.bias = -0.0006;
   scene.add(sun); scene.add(sun.target);
-  spot = new THREE.SpotLight(0xfff2d0, 0, 38, 0.46, 0.55, 1.1);
+  spot = new THREE.SpotLight(0xfff2d0, 0, 45, 0.5, 0.55, 1.1);
   spot.castShadow = true;
   spot.shadow.mapSize.set(512, 512);
   spot.shadow.bias = -0.001;
   camera.add(spot); spot.position.set(0.18, -0.22, 0.05);
   spotTarget = new THREE.Object3D(); spotTarget.position.set(0, -0.12, -1);
   camera.add(spotTarget); spot.target = spotTarget;
-  // volumetric beam + dust
   beamCone = new THREE.Mesh(new THREE.ConeGeometry(3.1, 13, 20, 1, true), new THREE.MeshBasicMaterial({ color: 0xffe9b0, transparent: true, opacity: 0.05, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }));
   beamCone.rotation.x = -Math.PI / 2; beamCone.position.set(0.18, -0.2, -6.6);
   camera.add(beamCone);
@@ -1040,8 +1042,8 @@ function applyCycle(t) {
   scene.background = new THREE.Color().lerpColors(new THREE.Color(0x000000), new THREE.Color(0x9fc3e8), df);
   scene.fog.color.copy(scene.background).multiplyScalar(0.35);
   scene.fog.density = lerp(0.024, 0.0035, df);
-  hemi.intensity = lerp(0.09, 0.85, df);
-  sun.intensity = lerp(0.05, 1.0, df);
+  hemi.intensity = lerp(0.12, 0.85, df);
+  sun.intensity = lerp(0.12, 1.0, df);
   sun.color.lerpColors(new THREE.Color(0x7788aa), new THREE.Color(0xfff2d0), df);
   sun.position.set(local.x + 40, 70, local.z + 25);
   sun.target.position.set(local.x, 0, local.z);
@@ -1049,7 +1051,7 @@ function applyCycle(t) {
   if (moonSpr) moonSpr.material.opacity = 1 - df;
   const flick = creatureDist < 12 ? (Math.random() < 0.14 ? 0.35 : 1) : 1;
   const on = flashOn && view && view.me && view.me.s < 2;
-  spot.intensity = on ? 2.6 * flick * (1 - df * 0.85) : 0;
+  spot.intensity = on ? 3.0 * flick * (1 - df * 0.85) : 0;
   beamCone.visible = on && df < 0.5;
   beamCone.material.opacity = 0.05 * (1 - df) * flick;
   dustPts.visible = on && df < 0.5;
@@ -1115,7 +1117,6 @@ function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
   const t = now / 1000;
-  /* auto quality */
   qAcc += dt; qN++; qT += dt;
   if (qT > 3) {
     const avg = qAcc / qN;
@@ -1219,8 +1220,9 @@ function frame(now) {
   }
 
   const hurtBase = me && me.s === 1 ? 0.45 + Math.sin(t * 3) * 0.08 : 0;
-  $('hurtVig').style.opacity = clamp(Math.max(redPulse, hurtBase) + (creatureDist < 6 && me && me.s < 2 ? (1 - creatureDist / 6) * 0.5 : 0), 0, 1);
-  $('pulse').style.opacity = $('hurtVig').style.opacity;
+  const vig = clamp(Math.max(redPulse, hurtBase) + (creatureDist < 6 && me && me.s < 2 ? (1 - creatureDist / 6) * 0.5 : 0), 0, 1);
+  $('hurtVig').style.opacity = vig;
+  $('pulse').style.opacity = vig;
 
   renderer.render(scene, camera);
   updateHUD();
