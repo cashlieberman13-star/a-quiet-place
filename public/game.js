@@ -1,5 +1,5 @@
 'use strict';
-/* A QUIET PLACE v3.1 — complete client. */
+/* A QUIET PLACE v4 — 10 creatures, sonar noise rings sized by loudness. */
 const WG = window.WorldGen;
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
@@ -22,14 +22,14 @@ let yaw = 0, pitch = 0, tYaw = 0, tPitch = 0, locked = false, lastRunning = fals
 const keys = {};
 let stamina = 100, stamBroken = false, flashOn = false;
 const local = { x: 0, z: 0, y: 1.62, init: false, stepAcc: 0, bob: 0 };
-let view = null;
+let view = null, nearestC = null;
 let groundMesh, houseMesh, roofMesh, doorMeshes = [], treeTrunks, treeCans, planeMesh, grassChunks = new Map();
-let creature = null, cPhase = 0;
+let creatureRigs = [];
 const playerObjs = new Map();
 const fuseMeshes = new Map(), ringPool = [], rings = [], pebbles = [], pebbleMeshes = [];
 let dayF = 0;
+let sonarBone = null, sonarAmber = null, sonarRed = null;
 
-/* auto quality */
 let qLevel = 2, qAcc = 0, qN = 0, qT = 0, GRASS_R = 2;
 function applyQuality() {
   if (!renderer) return;
@@ -38,7 +38,6 @@ function applyQuality() {
   else { renderer.setPixelRatio(1); renderer.shadowMap.enabled = false; GRASS_R = 1; }
 }
 
-/* ================= textures ================= */
 const TEX = {};
 function cnv(w, h) { const c = document.createElement('canvas'); c.width = w; c.height = h || w; return c; }
 function srgb(t) { t.encoding = THREE.sRGBEncoding; return t; }
@@ -87,9 +86,21 @@ function buildTextures() {
     for (let x = 8; x < 256; x += 32) for (let y = 8; y < 256; y += 32) { g.beginPath(); g.arc(x, y, 2, 0, 7); g.fill(); }
     TEX.metal = srgb(new THREE.CanvasTexture(c));
   }
+  /* sonar ping textures */
+  const mk = rgb => {
+    const c = cnv(256), g = c.getContext('2d');
+    const gr = g.createRadialGradient(128, 128, 0, 128, 128, 128);
+    gr.addColorStop(0, `rgba(${rgb},0)`);
+    gr.addColorStop(0.45, `rgba(${rgb},0.05)`);
+    gr.addColorStop(0.75, `rgba(${rgb},0.18)`);
+    gr.addColorStop(0.92, `rgba(${rgb},0.8)`);
+    gr.addColorStop(1, `rgba(${rgb},0)`);
+    g.fillStyle = gr; g.fillRect(0, 0, 256, 256);
+    return new THREE.CanvasTexture(c);
+  };
+  sonarBone = mk('216,212,200'); sonarAmber = mk('232,163,61'); sonarRed = mk('194,43,51');
 }
 
-/* ================= audio ================= */
 let ac = null, master = null, noiseBuf = null, growlGain = null;
 function audioInit() {
   if (ac) return;
@@ -198,7 +209,6 @@ function breath(v) {
   noiseHit(t + 0.65, 0.7, 420, 0.6, v * 0.65, local.x, local.z);
 }
 
-/* ================= mic ================= */
 const MIC = { on: false, analyser: null, data: null, lvl: 0, thr: 0.012, calib: false, calibT: 0, samples: [], lastSend: 0, stream: null };
 async function micStart() {
   try {
@@ -244,7 +254,6 @@ function micSend() {
   }
 }
 
-/* ================= voice ================= */
 const VC = { pcs: new Map(), nodes: new Map() };
 function vcDrop(id) {
   const pc = VC.pcs.get(id); if (pc) { try { pc.close(); } catch (e) {} VC.pcs.delete(id); }
@@ -295,7 +304,6 @@ function vcFrame() {
   }
 }
 
-/* ================= net ================= */
 let connTries = 0;
 function connect() {
   if (NET.ws && (NET.ws.readyState === 0 || NET.ws.readyState === 1)) return;
@@ -349,7 +357,6 @@ function onState(d) {
   if (rawMe && rawMe.s === 0) wasDead = false;
 }
 
-/* ================= jumpscare ================= */
 let scareFace = null;
 function buildScareFace() {
   const c = cnv(640, 360), g = c.getContext('2d');
@@ -395,7 +402,6 @@ function jumpscare(dur) {
   scareT = setTimeout(() => $('scare').classList.remove('on'), dur);
 }
 
-/* ================= world build ================= */
 function rebuildSolids() {
   if (!WORLD) return;
   const arr = WORLD.walls.slice();
@@ -585,8 +591,9 @@ function buildWorld3D() {
     fuseMeshes.set(f.id, g);
   });
 
-  for (let i = 0; i < 14; i++) {
-    const m = new THREE.Mesh(new THREE.RingGeometry(0.92, 1, 40), new THREE.MeshBasicMaterial({ color: 0xd8d4c8, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false }));
+  /* sonar ring pool */
+  for (let i = 0; i < 28; i++) {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, map: sonarBone }));
     m.rotation.x = -Math.PI / 2; m.visible = false;
     scene.add(m); ringPool.push(m);
   }
@@ -594,7 +601,7 @@ function buildWorld3D() {
     const m = new THREE.Mesh(new THREE.SphereGeometry(0.07, 6, 6), new THREE.MeshLambertMaterial({ color: 0x8f8a80 }));
     m.visible = false; scene.add(m); pebbleMeshes.push(m);
   }
-  buildCreature3D();
+  buildCreatures3D();
   buildSky();
 }
 function buildSky() {
@@ -618,7 +625,7 @@ function buildSky() {
   moonSpr.position.set(180, 220, -260);
   scene.add(moonSpr);
 }
-function buildCreature3D() {
+function buildCreatureRig() {
   const g = new THREE.Group();
   const dark = new THREE.MeshLambertMaterial({ color: 0x0b0b0e });
   const pale = new THREE.MeshLambertMaterial({ color: 0xcfc8b6 });
@@ -645,7 +652,11 @@ function buildCreature3D() {
   g.add(torso, pelvis, head, blob);
   g.traverse(o => { if (o.isMesh) o.castShadow = true; });
   scene.add(g);
-  creature = { g, limbs, head, torso };
+  return { g, limbs, head, torso, phase: 0 };
+}
+function buildCreatures3D() {
+  creatureRigs = [];
+  for (let i = 0; i < 10; i++) creatureRigs.push(buildCreatureRig());
 }
 function makePlayerObj(id) {
   const r = roster.get(id) || { color: '#999', name: '' };
@@ -672,7 +683,6 @@ function disposePlayer(id) { const o = playerObjs.get(id); if (o) { scene.remove
 function initWorld(world) {
   if (scene) {
     scene.clear();
-    /* THE FIX: scene.clear() removed the camera + lights. Re-attach them. */
     scene.add(camera);
     scene.add(hemi);
     scene.add(sun);
@@ -690,7 +700,6 @@ function initWorld(world) {
   roster.forEach((r, id) => makePlayerObj(id));
 }
 
-/* grass */
 const grassTimeUniforms = [];
 function grassMaterial() {
   const m = new THREE.MeshLambertMaterial({ map: TEX.grass, alphaTest: 0.45, side: THREE.DoubleSide });
@@ -739,7 +748,6 @@ function ensureGrass() {
   }
 }
 
-/* three init */
 function threeInit() {
   renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true, powerPreference: 'high-performance' });
   renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 1.5));
@@ -800,7 +808,6 @@ function resize() {
 }
 addEventListener('resize', resize);
 
-/* controls */
 addEventListener('keydown', e => {
   if (e.code === 'Tab') e.preventDefault();
   keys[e.code] = true;
@@ -890,20 +897,26 @@ function buildView() {
     return Object.assign({}, pa, { x: pb ? lerp(pa.x, pb.x, f) : pa.x, z: pb ? lerp(pa.z, pb.z, f) : pa.z },
       pb ? { s: pb.s, f: pb.f, r: pb.r, rv: pb.rv, g: pb.g, d: pb.d, l: pb.l } : {});
   });
-  const c0 = a.d.c, c1 = b ? b.d.c : c0;
-  const c = Object.assign({}, c0, { x: lerp(c0.x, c1.x, f), z: lerp(c0.z, c1.z, f), s: c1.s, tg: c1.tg, d: c1.d, m: c1.m });
-  return { p: ps, c, me: ps.find(q => q.id === NET.id) || null };
+  const cs = (a.d.c || []).map((c0, i) => {
+    const c1 = b && b.d.c && b.d.c[i];
+    return Object.assign({}, c0, {
+      x: lerp(c0.x, c1 ? c1.x : c0.x, f), z: lerp(c0.z, c1 ? c1.z : c0.z, f),
+      s: c1 ? c1.s : c0.s, tg: c1 ? c1.tg : c0.tg, d: c1 ? c1.d : c0.d, m: c1 ? c1.m : c0.m
+    });
+  });
+  return { p: ps, cs, me: ps.find(q => q.id === NET.id) || null };
 }
 
 function audVol(x, z, range) { const d = Math.hypot(x - local.x, z - local.z); return d > range ? 0 : 1 - d / range; }
 function name(id) { return id === NET.id ? myName : (roster.get(id) || { name: '???' }).name; }
-function spawnRing(x, z, i, voice) {
+/* sonar ping: radius == exactly how far the creatures can hear it */
+function spawnRing(x, z, i, kind) {
   const m = ringPool.find(m => !m.visible);
   if (!m) return;
   m.visible = true;
-  m.position.set(x, WG.height(x, z) + 0.1, z);
-  m.material.color.set(voice ? 0xe8a33d : 0xd8d4c8);
-  m.userData = { t: performance.now(), max: 4 + i * 9 };
+  m.position.set(x, WG.height(x, z) + 0.12, z);
+  m.material.map = kind === 'voice' ? sonarAmber : kind === 'red' ? sonarRed : sonarBone;
+  m.userData = { t: performance.now(), max: 4 + i * 9, life: 1.8 };
   rings.push(m);
 }
 function handleEvents(evs) {
@@ -911,14 +924,14 @@ function handleEvents(evs) {
     const v = audVol(e.x, e.z, 120);
     switch (e.k) {
       case 'noise':
-        if (e.i >= 0.2) spawnRing(e.x, e.z, e.i, e.a === 'voice');
+        if (e.i >= 0.15) spawnRing(e.x, e.z, e.i, e.a === 'voice' ? 'voice' : 'bone');
         if (e.a === 'land' && v > 0) sfx.thud(v, e.x, e.z);
         break;
       case 'step': if (e.id !== NET.id && v > 0) sfx.step(v * 0.5, e.x, e.z, false); break;
       case 'door': if (v > 0) sfx.door(v, e.x, e.z); break;
-      case 'breach': if (v > 0) sfx.breach(v, e.x, e.z); shake = Math.max(shake, 0.5 * v); log('IT BROKE A DOOR DOWN', 'bad'); break;
-      case 'shriek': sfx.shriek(0.3 + v * 0.7, e.x, e.z); shake = Math.max(shake, 0.6); break;
-      case 'roar': sfx.roar(0.25 + v * 0.75, e.x, e.z); if (v > 0.4) shake = Math.max(shake, 0.3); break;
+      case 'breach': if (v > 0) sfx.breach(v, e.x, e.z); spawnRing(e.x, e.z, 2.2, 'red'); shake = Math.max(shake, 0.5 * v); log('IT BROKE A DOOR DOWN', 'bad'); break;
+      case 'shriek': sfx.shriek(0.3 + v * 0.7, e.x, e.z); spawnRing(e.x, e.z, 2.4, 'red'); shake = Math.max(shake, 0.6); break;
+      case 'roar': sfx.roar(0.25 + v * 0.75, e.x, e.z); spawnRing(e.x, e.z, 2.6, 'red'); if (v > 0.4) shake = Math.max(shake, 0.3); break;
       case 'hit':
         if (v > 0) sfx.scream(v, e.x, e.z);
         if (e.id === NET.id) { jumpscare(750); redPulse = 1; log('IT GOT YOU — ONE MORE HIT AND YOU DROP', 'bad'); }
@@ -926,6 +939,7 @@ function handleEvents(evs) {
         break;
       case 'down':
         if (v > 0) sfx.scream(v, e.x, e.z);
+        spawnRing(e.x, e.z, 1.2, 'red');
         if (e.id === NET.id) { jumpscare(1200); redPulse = 1; log('YOU ARE DOWN — CRAWL. WAIT FOR HELP.', 'bad'); }
         else log(name(e.id) + ' IS DOWN', 'bad');
         break;
@@ -938,8 +952,8 @@ function handleEvents(evs) {
       case 'pickup': sfx.chime(0.6, e.x, e.z); log(name(e.id) + ' HAS A FUSE', 'good'); break;
       case 'install': sfx.install(0.8, e.x, e.z); log('FUSE INSTALLED — ' + genN + '/' + genTotal, 'good'); banner('FUSE ' + genN + ' OF ' + genTotal); break;
       case 'thrown': if (e.dx != null) pebbles.push({ x: e.x, z: e.z, dx: e.dx, dz: e.dz, t: 0 }); break;
-      case 'dawn': banner('DAY — IT SLEEPS. MOVE.', false); log('DAWN. FUSES SINK UNTIL NIGHTFALL.', 'good'); break;
-      case 'dusk': banner('NIGHT FALLS — FUSES SURFACE', true); log('NIGHT. IT HUNTS.', 'bad'); break;
+      case 'dawn': banner('DAY — THEY SLEEP. MOVE.', false); log('DAWN. FUSES SINK UNTIL NIGHTFALL.', 'good'); break;
+      case 'dusk': banner('NIGHT FALLS — THEY WAKE', true); log('NIGHT. THE PACK HUNTS.', 'bad'); break;
       case 'win': sfx.win(0.8); break;
       case 'lose': sfx.lose(0.8); jumpscare(1600); document.exitPointerLock(); break;
     }
@@ -961,11 +975,11 @@ function updateHUD() {
   $('obj').innerHTML =
     '<span class="room">ROOM ' + ROOM + '</span> · SURVIVORS <b>' + view.p.filter(q => q.s < 3).length + '</b><br>' +
     'FUSES <b>' + genN + '/' + genTotal + '</b> · POWER THE TOWER' +
-    (graceT > 0 ? '<br><span class="wake">IT WAKES IN ' + graceT + 's</span>' : '') +
+    (graceT > 0 ? '<br><span class="wake">THE PACK WAKES IN ' + graceT + 's</span>' : '') +
     (view.me && view.me.s === 1 ? '<br><span class="wake">YOU ARE HURT — HOLD E TO BANDAGE</span>' : '');
   const ck = $('clock');
   ck.className = cyc; ck.textContent = (cyc === 'night' ? '☾ NIGHT ' : '☀ DAY ') + fmt(cycT);
-  $('warn').classList.toggle('on', creatureDist < 25 || (view.c.s === 'hunt' && view.c.tg === NET.id));
+  $('warn').classList.toggle('on', creatureDist < 25 || view.cs.some(c => c.s === 'hunt' && c.tg === NET.id));
   $('stamFill').style.width = stamina + '%';
   $('mic').classList.toggle('hot', MIC.lvl > MIC.thr);
   $('micFill').style.width = MIC.on ? clamp(MIC.lvl / (MIC.thr * 4) * 100, 0, 100) + '%' : '0%';
@@ -996,7 +1010,7 @@ function updateHUD() {
   const end = $('end');
   if (phase === 'won' || phase === 'lost') {
     end.classList.remove('hidden');
-    $('endTitle').textContent = phase === 'won' ? 'THE TOWER SINGS — RESCUED' : 'IT TOOK YOU ALL';
+    $('endTitle').textContent = phase === 'won' ? 'THE TOWER SINGS — RESCUED' : 'THE PACK FED TONIGHT';
     $('endTitle').className = phase === 'won' ? 'amber' : 'red';
     $('endSub').textContent = 'room ' + ROOM + ' · ' + (phase === 'won' ? 'you escaped the quiet' : 'the quiet keeps you');
   } else end.classList.add('hidden');
@@ -1025,6 +1039,11 @@ function drawMinimap() {
     const last = snaps[snaps.length - 1];
     if (last) for (const f of last.d.fu) if (f[1] !== 'h' && f[1] !== 'i') {
       mc.fillStyle = '#e8a33d'; mc.fillRect(f[1] * s - 1, f[2] * s - 1, 2.5, 2.5);
+    }
+    /* hunting creatures show as red blips — they're loud enough to "ping" */
+    for (const c of view.cs) if (c.s === 'hunt') {
+      mc.fillStyle = '#c22b33';
+      mc.beginPath(); mc.arc(c.x * s, c.z * s, 2.4, 0, 7); mc.fill();
     }
   }
   for (const p of view.p) {
@@ -1063,24 +1082,29 @@ function applyCycle(t) {
     genLight.intensity = active ? 2.2 : 0;
   }
 }
-function updateCreature3D(dt, t) {
-  const c = view.c;
-  creature.g.position.set(c.x, WG.height(c.x, c.z), c.z);
-  creature.g.rotation.y = c.d;
-  const hunt = c.s === 'hunt';
-  const spd = hunt ? 5.5 : c.s === 'roam' ? 1.2 : 2.6;
-  if (c.m) cPhase += dt * spd * 2.4;
-  const sw = Math.sin(cPhase), sw2 = Math.sin(cPhase + Math.PI);
-  const L = creature.limbs;
-  L.ll.pivot.rotation.x = sw * 0.7; L.ll.p2.rotation.x = Math.max(0, -sw) * 0.9;
-  L.rl.pivot.rotation.x = sw2 * 0.7; L.rl.p2.rotation.x = Math.max(0, -sw2) * 0.9;
-  const armR = hunt ? -2.4 : -0.5;
-  L.la.pivot.rotation.x = hunt ? armR + sw * 0.3 : sw2 * 0.5;
-  L.ra.pivot.rotation.x = hunt ? armR + sw2 * 0.3 : sw * 0.5;
-  L.la.p2.rotation.x = hunt ? -0.5 : 0.2;
-  L.ra.p2.rotation.x = hunt ? -0.5 : 0.2;
-  creature.torso.rotation.x = 0.35 + (hunt ? 0.25 : 0);
-  creature.head.rotation.y = hunt ? (Math.random() - 0.5) * 0.5 : Math.sin(t * 0.7) * 0.3;
+function updateCreatures3D(dt, t) {
+  for (let i = 0; i < creatureRigs.length; i++) {
+    const rig = creatureRigs[i];
+    const c = view.cs[i];
+    if (!c) { rig.g.visible = false; continue; }
+    rig.g.visible = true;
+    rig.g.position.set(c.x, WG.height(c.x, c.z), c.z);
+    rig.g.rotation.y = c.d;
+    const hunt = c.s === 'hunt';
+    const spd = hunt ? 5.5 : c.s === 'roam' ? 1.2 : 3.2;
+    if (c.m) rig.phase += dt * spd * 2.4;
+    const sw = Math.sin(rig.phase), sw2 = Math.sin(rig.phase + Math.PI);
+    const L = rig.limbs;
+    L.ll.pivot.rotation.x = sw * 0.7; L.ll.p2.rotation.x = Math.max(0, -sw) * 0.9;
+    L.rl.pivot.rotation.x = sw2 * 0.7; L.rl.p2.rotation.x = Math.max(0, -sw2) * 0.9;
+    const armR = hunt ? -2.4 : -0.5;
+    L.la.pivot.rotation.x = hunt ? armR + sw * 0.3 : sw2 * 0.5;
+    L.ra.pivot.rotation.x = hunt ? armR + sw2 * 0.3 : sw * 0.5;
+    L.la.p2.rotation.x = hunt ? -0.5 : 0.2;
+    L.ra.p2.rotation.x = hunt ? -0.5 : 0.2;
+    rig.torso.rotation.x = 0.35 + (hunt ? 0.25 : 0);
+    rig.head.rotation.y = hunt ? (Math.random() - 0.5) * 0.5 : Math.sin(t * 0.7 + i) * 0.3;
+  }
 }
 function animateDoors(dt) {
   doorMeshes.forEach((m, i) => {
@@ -1135,7 +1159,16 @@ function frame(now) {
   predict(dt);
 
   const me = view.me;
-  creatureDist = me ? Math.hypot(view.c.x - local.x, view.c.z - local.z) : 1e9;
+  nearestC = null; creatureDist = 1e9;
+  let nearestHuntDist = 1e9, nearestMoveC = null, nearestMoveDist = 1e9, nearestSeekDist = 1e9;
+  for (const c of view.cs) {
+    const d = Math.hypot(c.x - local.x, c.z - local.z);
+    if (d < creatureDist) { creatureDist = d; nearestC = c; }
+    if (c.s === 'hunt' && d < nearestHuntDist) nearestHuntDist = d;
+    if (c.m && d < nearestMoveDist) { nearestMoveDist = d; nearestMoveC = c; }
+    if ((c.s === 'search' || c.s === 'investigate') && d < nearestSeekDist) nearestSeekDist = d;
+  }
+  if (!me) creatureDist = 1e9;
 
   const eye = keys.KeyC ? 1.05 : 1.62;
   local.y += ((WG.height(local.x, local.z) + eye) - local.y) * Math.min(1, dt * 10);
@@ -1143,10 +1176,10 @@ function frame(now) {
   if (me && me.s < 3) {
     camera.position.set(local.x, local.y + bobY, local.z);
     camera.rotation.set(pitch, yaw, 0);
-  } else {
-    const cy = WG.height(view.c.x, view.c.z) + 3;
-    camera.position.lerp(new THREE.Vector3(view.c.x, cy, view.c.z), Math.min(1, dt * 3));
-    camera.lookAt(view.c.x, cy - 1.5, view.c.z);
+  } else if (nearestC) {
+    const cy = WG.height(nearestC.x, nearestC.z) + 3;
+    camera.position.lerp(new THREE.Vector3(nearestC.x, cy, nearestC.z), Math.min(1, dt * 3));
+    camera.lookAt(nearestC.x, cy - 1.5, nearestC.z);
   }
   const targetFov = lastRunning ? 78 : 72;
   if (Math.abs(camera.fov - targetFov) > 0.1) { camera.fov += (targetFov - camera.fov) * Math.min(1, dt * 6); camera.updateProjectionMatrix(); }
@@ -1170,15 +1203,17 @@ function frame(now) {
 
   ensureGrass();
   applyCycle(t);
-  updateCreature3D(dt, t);
+  updateCreatures3D(dt, t);
   updatePlayers3D();
   animateDoors(dt);
 
+  /* sonar rings: expand + fade like a radar ping */
   for (let i = rings.length - 1; i >= 0; i--) {
-    const m = rings[i], age = (now - m.userData.t) / 1000, r = age * 10;
-    if (r > m.userData.max) { m.visible = false; rings.splice(i, 1); continue; }
+    const m = rings[i], u = (now - m.userData.t) / 1000 / m.userData.life;
+    if (u >= 1) { m.visible = false; m.material.opacity = 0; rings.splice(i, 1); continue; }
+    const r = m.userData.max * u;
     m.scale.set(r, r, r);
-    m.material.opacity = (1 - r / m.userData.max) * 0.5;
+    m.material.opacity = Math.pow(1 - u, 1.6) * 0.85;
   }
   pebbles.forEach(pb => { pb.t += dt; });
   pebbleMeshes.forEach((m, i) => {
@@ -1193,7 +1228,7 @@ function frame(now) {
 
   if (ac) {
     if (growlGain) {
-      const gv = view.c.s === 'hunt' && creatureDist < 40 && me && me.s < 2 ? clamp(1 - creatureDist / 40, 0, 1) * 0.16 : 0;
+      const gv = nearestHuntDist < 40 && me && me.s < 2 ? clamp(1 - nearestHuntDist / 40, 0, 1) * 0.16 : 0;
       growlGain.gain.setTargetAtTime(gv, ac.currentTime, 0.2);
     }
     if (me && me.s < 2) {
@@ -1204,17 +1239,18 @@ function frame(now) {
       const fear = clamp(1 - creatureDist / 18, 0, 1);
       if (fear > 0.15 && t >= breathNext) { breath(fear * 0.22); breathNext = t + lerp(3.0, 1.1, fear); }
     }
-    if (view.c.m && creatureDist < 60 && t >= cStepNext) {
-      cStepNext = t + (view.c.s === 'hunt' ? 0.38 : 0.72);
-      sfx.cfoot(clamp(1 - creatureDist / 60, 0, 1) * 0.9, view.c.x, view.c.z);
-      if (creatureDist < 12) shake = Math.max(shake, 0.2);
+    if (nearestMoveC && nearestMoveDist < 60 && t >= cStepNext) {
+      cStepNext = t + (nearestMoveC.s === 'hunt' ? 0.38 : 0.72);
+      sfx.cfoot(clamp(1 - nearestMoveDist / 60, 0, 1) * 0.9, nearestMoveC.x, nearestMoveC.z);
+      if (nearestMoveDist < 12) shake = Math.max(shake, 0.2);
     }
-    if ((view.c.s === 'search' || view.c.s === 'investigate') && creatureDist < 30 && t > clickT) {
+    if (nearestSeekDist < 30 && t > clickT) {
       clickT = t + 0.7 + Math.random();
-      sfx.click(clamp(1 - creatureDist / 30, 0, 1), view.c.x, view.c.z);
+      sfx.click(clamp(1 - nearestSeekDist / 30, 0, 1), local.x + 10, local.z + 10);
     }
-    if (view.c.s === 'hunt' && !prevHunt && creatureDist < 40 && me && me.s < 2) shake = Math.max(shake, 0.4);
-    prevHunt = view.c.s === 'hunt';
+    const anyHunt = nearestHuntDist < 1e8;
+    if (anyHunt && !prevHunt && nearestHuntDist < 40 && me && me.s < 2) shake = Math.max(shake, 0.4);
+    prevHunt = anyHunt;
     ambientT -= dt;
     if (ambientT < 0) { ambientT = 8 + Math.random() * 14; noiseHit(ac.currentTime, 1.4, 500 + Math.random() * 600, 0.5, 0.03, local.x + 40, local.z + 40); }
   }
@@ -1229,7 +1265,6 @@ function frame(now) {
   drawMinimap();
 }
 
-/* boot */
 threeInit();
 applyQuality();
 joinRoom = (new URLSearchParams(location.search).get('room') || '').toUpperCase();
@@ -1251,3 +1286,5 @@ $('skipMic').addEventListener('click', () => { MIC.calib = false; connect(); });
   e.stopPropagation();
 }));
 requestAnimationFrame(frame);
+
+// === END OF GAME.JS ===
