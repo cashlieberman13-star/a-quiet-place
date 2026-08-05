@@ -48,7 +48,6 @@ function makeGame() {
   };
 }
 
-/* ---------------- rooms ---------------- */
 const rooms = new Map();
 const CH = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 function genCode() { let c; do { c = ''; for (let i = 0; i < 4; i++) c += CH[(Math.random() * CH.length) | 0]; } while (rooms.has(c)); return c; }
@@ -324,4 +323,87 @@ function tick(rm) {
       if (p.rocks < 3) { p.rockT += dt; if (p.rockT >= 22) { p.rockT = 0; p.rocks++; } }
     }
     for (const p of pArr(rm)) if ((p.state === 'down' || p.state === 'hurt') && !p.rvActive) p.rv = Math.max(0, p.rv - dt * 0.08);
-    updateRocks(rm, dt); updateCreature
+    updateRocks(rm, dt); updateCreature(rm, dt);
+    const ps = pArr(rm);
+    if (ps.length && ps.every(p => p.state === 'down' || p.state === 'dead')) { g.phase = 'lost'; g.phaseT = 30; ev(rm, 'lose', 0, 0, 0); }
+  } else { g.phaseT -= dt; if (g.phaseT <= 0) resetRound(rm); }
+  if (++rm.tickN % BCAST_EVERY === 0) broadcast(rm);
+}
+
+wss.on('connection', ws => {
+  ws.on('message', raw => onMsg(ws, raw));
+  ws.on('close', () => leave(ws));
+});
+setInterval(() => {
+  for (const rm of rooms.values()) for (const ws of rm.players.keys()) {
+    if (!ws.isAlive) { ws.terminate(); continue; }
+    ws.isAlive = false; ws.ping();
+  }
+}, 25000);
+
+function join(rm, ws, nameRaw) {
+  const name = String(nameRaw || 'SURVIVOR').replace(/[^\w \-]/g, '').slice(0, 14).toUpperCase() || 'SURVIVOR';
+  const used = new Set(pArr(rm).map(q => q.color));
+  const color = COLORS.find(c => !used.has(c)) || COLORS[rm.players.size % COLORS.length];
+  const p = { id: ++rm.idSeq, name, color, ws, input: { mx: 0, mz: 0, run: 0, sneak: 0, e: 0, f: 0 } };
+  rm.players.set(ws, p);
+  ws.ctx = { rm, p }; ws.isAlive = true;
+  ws.on('pong', () => ws.isAlive = true);
+  respawn(rm, p); rm.emptyAt = 0;
+  ws.send(JSON.stringify({
+    t: 'welcome', id: p.id, color, room: rm.code, seed: rm.game.seed, world: rm.game.world,
+    grace: GRACE, phase: rm.game.phase,
+    roster: pArr(rm).filter(q => q !== p).map(q => ({ id: q.id, name: q.name, color: q.color }))
+  }));
+  for (const [ws2, q] of rm.players) if (q !== p && ws2.readyState === 1) ws2.send(JSON.stringify({ t: 'peer', id: p.id, name, color }));
+}
+function leave(ws) {
+  const ctx = ws.ctx; if (!ctx) return;
+  const { rm, p } = ctx;
+  p.gone = true; dropFuse(rm, p); rm.players.delete(ws);
+  if (rm.game.creature.target === p) rm.game.creature.target = null;
+  sendAll(rm, { t: 'leave', id: p.id });
+  if (!rm.players.size) rm.emptyAt = Date.now();
+}
+function onMsg(ws, raw) {
+  let m; try { m = JSON.parse(raw); } catch { return; }
+  if (m.t === 'join') {
+    if (ws.ctx) return;
+    let code = String(m.room || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+    let rm = code ? rooms.get(code) : null;
+    if (!rm) { code = code || genCode(); rm = createRoom(code); rooms.set(code, rm); }
+    if (rm.players.size >= MAX_PLAYERS) { ws.send(JSON.stringify({ t: 'full' })); return; }
+    join(rm, ws, m.name);
+    return;
+  }
+  const ctx = ws.ctx; if (!ctx) return;
+  const { rm, p } = ctx, g = rm.game;
+  if (m.t === 'input') {
+    let mx = clampN(+m.mx || 0), mz = clampN(+m.mz || 0);
+    const ml = Math.hypot(mx, mz);
+    if (ml > 1) { mx /= ml; mz /= ml; }
+    Object.assign(p.input, { mx, mz, run: !!m.run, sneak: !!m.sneak, e: !!m.e, f: !!m.f });
+  } else if (m.t === 'noise') {
+    if (p.state === 'dead' || g.phase !== 'play' || p.micCd > g.time) return;
+    p.micCd = g.time + 0.15;
+    emitNoise(rm, p.x, p.z, 0.45 + Math.min(1, Math.max(0, +m.v || 0)) * 2.3, 'voice', p);
+  } else if (m.t === 'throw') {
+    if (p.state !== 'alive' || p.rocks <= 0) return;
+    const len = Math.hypot(m.dx, m.dz) || 1, dx = m.dx / len, dz = m.dz / len;
+    p.rocks--; p.rockT = 0;
+    g.rocksAir.push({ x: p.x + dx * 0.5, z: p.z + dz * 0.5, vx: dx * 13, vz: dz * 13, life: 0.7 });
+    ev(rm, 'thrown', p.x, p.z, 0.2, p.id);
+    const e = g.events[g.events.length - 1]; e.dx = +dx.toFixed(2); e.dz = +dz.toFixed(2);
+  } else if (m.t === 'rtc') {
+    for (const [ws2, q] of rm.players) if (q.id === m.to && ws2.readyState === 1) {
+      ws2.send(JSON.stringify({ t: 'rtc', from: p.id, c: m.c }));
+      break;
+    }
+  }
+}
+
+netServer.listen(PORT, () => console.log('a quiet place → port ' + PORT));
+
+// ==========================================================
+// === END OF SERVER.JS === (If you don't see this line, your copy-paste was cut off!)
+// ==========================================================
