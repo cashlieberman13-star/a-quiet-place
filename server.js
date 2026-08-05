@@ -29,6 +29,7 @@ const wss = new WebSocketServer({ server: netServer });
 
 const dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 const R = v => Math.round(v * 10) / 10;
+const clampN = v => Math.max(-1, Math.min(1, v));
 
 function makeGame() {
   const seed = (Math.random() * 0xffffffff) >>> 0;
@@ -42,11 +43,12 @@ function makeGame() {
     genN: 0, genTotal: world.fuses.length,
     creature: { x: far.x, z: far.z, dir: 0, state: 'roam', goal: null, target: null, lastKnown: null,
       huntT: 0, searchT: 0, subT: 0, searchC: null, idleT: 0, attackCd: 0, execT: 0, pauseT: 0,
-      stuckT: 0, detourT: 0, detourSign: 1, senseT: 0, shriekCd: 0 },
+      stuckT: 0, detourT: 0, detourSign: 1, senseT: 0, shriekCd: 0, roarT: 0 },
     rocksAir: [], events: [], solidsCache: null, solidsDirty: false
   };
 }
 
+/* ---------------- rooms ---------------- */
 const rooms = new Map();
 const CH = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 function genCode() { let c; do { c = ''; for (let i = 0; i < 4; i++) c += CH[(Math.random() * CH.length) | 0]; } while (rooms.has(c)); return c; }
@@ -79,13 +81,9 @@ function nearestAlive(rm, x, z) {
 
 function hear(rm, x, z, i, src) {
   const g = rm.game;
-  if (g.phase !== 'play' || (g.roundT < GRACE && g.cyc === 'night' && g.time < GRACE + 5)) {}
-  if (g.phase !== 'play') return;
-  if (g.time < GRACE) return;
+  if (g.phase !== 'play' || g.time < GRACE) return;
   const c = g.creature;
-  if (g.cyc === 'day') {                       // day: only extreme noise nearby wakes it
-    if (!(i >= 1.4 && Math.hypot(c.x - x, c.z - z) < 10)) return;
-  }
+  if (g.cyc === 'day' && !(i >= 1.4 && Math.hypot(c.x - x, c.z - z) < 10)) return;
   if (src && src.state === 'down') i *= 1.35;
   const range = (4 + i * 9) * (c.state === 'hunt' ? 1.3 : 1);
   const d = Math.hypot(c.x - x, c.z - z);
@@ -118,15 +116,15 @@ function dropFuse(rm, p) {
   if (f) { f.st = 'ground'; f.x = p.x; f.z = p.z; f.heldBy = null; }
   p.fuse = null;
 }
-function downPlayer(rm, p) { p.state = 'down'; p.rv = 0; ev(rm, 'down', p.x, p.z, 0.9, p.id); hear(rm, p.x, p.z, 0.9, p); }
 function killPlayer(rm, p) { p.state = 'dead'; dropFuse(rm, p); ev(rm, 'dead', p.x, p.z, 0.6, p.id); }
 
 function movePlayer(rm, p, dt) {
   if (p.state === 'dead') return;
   const g = rm.game, inp = p.input;
-  let vx = (inp.r ? 1 : 0) - (inp.l ? 1 : 0), vz = (inp.d ? 1 : 0) - (inp.u ? 1 : 0);
-  if (!vx && !vz) { p.gait = 'idle'; return; }
-  const len = Math.hypot(vx, vz); vx /= len; vz /= len;
+  let vx = inp.mx || 0, vz = inp.mz || 0;
+  const len0 = Math.hypot(vx, vz);
+  if (len0 < 0.01) { p.gait = 'idle'; return; }
+  if (len0 > 1) { vx /= len0; vz /= len0; }
   const gait = inp.sneak ? 'sneak' : inp.run ? 'run' : 'walk';
   p.gait = gait;
   let spd = gait === 'run' ? 5.2 : gait === 'walk' ? 2.2 : 1.1;
@@ -135,7 +133,8 @@ function movePlayer(rm, p, dt) {
   if (p.fuse != null && gait === 'run') spd = 4.4;
   const res = WG.resolveCircle(p.x + vx * spd * dt, p.z + vz * spd * dt, WG.PR, solids(rm), g.world.trees, WG.SIZE);
   const moved = Math.hypot(res.x - p.x, res.z - p.z);
-  p.x = res.x; p.z = res.z; p.dir = Math.atan2(vx, vz);
+  p.x = res.x; p.z = res.z;
+  if (moved > 0.0001) p.dir = Math.atan2(-vx, -vz);
   p.stepAcc = Math.min(3, p.stepAcc + moved);
   const stride = gait === 'run' ? 2.3 : gait === 'walk' ? 1.7 : 1.2;
   if (p.stepAcc >= stride) {
@@ -148,8 +147,8 @@ const doorCenter = r => ({ x: r.x + r.w / 2, z: r.z + r.h / 2 });
 function interact(rm, p) {
   const g = rm.game;
   for (const f of g.fuses) if (f.st === 'ground' && dist(p, f) < 1.7) {
-    if (g.cyc !== 'night') return;                       // fuses only surface at night
-    if (p.fuse != null) return;                          // ONE fuse per person — the fix
+    if (g.cyc !== 'night') return;
+    if (p.fuse != null) return;
     f.st = 'held'; f.heldBy = p.id; p.fuse = f.id;
     ev(rm, 'pickup', f.x, f.z, 0.4, p.id);
     return;
@@ -171,6 +170,7 @@ function interact(rm, p) {
     emitNoise(rm, c.x, c.z, best.open ? 1.0 : 0.45, 'door', p);
   }
 }
+
 function careHold(rm, p, dt) {
   if (p.state === 'alive') {
     for (const q of pArr(rm)) if (q !== p && (q.state === 'down' || q.state === 'hurt') && dist(p, q) < 2) {
@@ -196,6 +196,7 @@ function routeViaDoor(rm, c, goal) {
   }
   return (best && bd > 1.2) ? best : goal;
 }
+
 function attackCheck(rm, dt) {
   const c = rm.game.creature;
   for (const p of pArr(rm)) if (p.state === 'down' && dist(p, c) < 1.0) {
@@ -212,6 +213,7 @@ function attackCheck(rm, dt) {
     return;
   }
 }
+
 function updateCreature(rm, dt) {
   const g = rm.game, c = g.creature;
   c.attackCd = Math.max(0, c.attackCd - dt);
@@ -243,7 +245,7 @@ function updateCreature(rm, dt) {
       c.huntT += dt;
       if (c.huntT > 3 && dist(tp, c) > 9) { c.state = 'search'; c.searchC = { x: tp.x, z: tp.z }; c.searchT = 5; c.target = null; break; }
       c.goal = { x: tp.x, z: tp.z };
-            c.roarT = (c.roarT || 0) - dt;
+      c.roarT = (c.roarT || 0) - dt;
       if (c.roarT <= 0) { c.roarT = 5 + Math.random() * 4; ev(rm, 'roar', c.x, c.z, 2.6); }
       break;
     }
@@ -273,6 +275,7 @@ function updateCreature(rm, dt) {
     } else { c.stuckT += dt; if (c.stuckT > 0.35) { c.stuckT = 0; c.detourT = 0.7; c.detourSign = Math.random() < 0.5 ? 1 : -1; } }
   } else c.stuckT = 0;
 }
+
 function updateRocks(rm, dt) {
   const g = rm.game;
   for (let i = g.rocksAir.length - 1; i >= 0; i--) {
@@ -296,8 +299,8 @@ function broadcast(rm) {
     cyc: { c: g.cyc, t: Math.ceil(g.cycT) },
     c: { x: R(c.x), z: R(c.z), d: +c.dir.toFixed(2), s: c.state, tg: c.target ? c.target.id : -1, m: c.moving ? 1 : 0 },
     p: pArr(rm).map(p => ({ id: p.id, x: R(p.x), z: R(p.z), d: +p.dir.toFixed(2),
-            s: p.state === 'alive' ? 0 : p.state === 'hurt' ? 1 : p.state === 'down' ? 2 : 3, f: p.fuse != null ? 1 : 0, r: p.rocks,
-      rv: +p.rv.toFixed(2), g: GAITS[p.gait] || 0, l: p.input.f ? 1 : 0 })),
+      s: p.state === 'alive' ? 0 : p.state === 'hurt' ? 1 : p.state === 'down' ? 2 : 3,
+      f: p.fuse != null ? 1 : 0, r: p.rocks, rv: +p.rv.toFixed(2), g: GAITS[p.gait] || 0, l: p.input.f ? 1 : 0 })),
     fu: g.fuses.map(f => f.st === 'ground' ? [f.id, R(f.x), R(f.z)] : f.st === 'held' ? [f.id, 'h'] : [f.id, 'i']),
     dn: g.doors.map(d => d.open ? 1 : 0), gn: g.genN, gt: g.genTotal, ev: g.events.splice(0)
   });
@@ -321,79 +324,4 @@ function tick(rm) {
       if (p.rocks < 3) { p.rockT += dt; if (p.rockT >= 22) { p.rockT = 0; p.rocks++; } }
     }
     for (const p of pArr(rm)) if ((p.state === 'down' || p.state === 'hurt') && !p.rvActive) p.rv = Math.max(0, p.rv - dt * 0.08);
-    updateRocks(rm, dt); updateCreature(rm, dt);
-    const ps = pArr(rm);
-        if (ps.length && ps.every(p => p.state === 'down' || p.state === 'dead')) { g.phase = 'lost'; g.phaseT = 30; ev(rm, 'lose', 0, 0, 0); }
-  } else { g.phaseT -= dt; if (g.phaseT <= 0) resetRound(rm); }
-  if (++rm.tickN % BCAST_EVERY === 0) broadcast(rm);
-}
-
-wss.on('connection', ws => {
-  ws.on('message', raw => onMsg(ws, raw));
-  ws.on('close', () => leave(ws));
-});
-setInterval(() => {
-  for (const rm of rooms.values()) for (const ws of rm.players.keys()) {
-    if (!ws.isAlive) { ws.terminate(); continue; }
-    ws.isAlive = false; ws.ping();
-  }
-}, 25000);
-
-function join(rm, ws, nameRaw) {
-  const name = String(nameRaw || 'SURVIVOR').replace(/[^\w \-]/g, '').slice(0, 14).toUpperCase() || 'SURVIVOR';
-  const used = new Set(pArr(rm).map(q => q.color));
-  const color = COLORS.find(c => !used.has(c)) || COLORS[rm.players.size % COLORS.length];
-  const p = { id: ++rm.idSeq, name, color, ws, input: { u: 0, d: 0, l: 0, r: 0, run: 0, sneak: 0, e: 0, f: 0 } };
-  rm.players.set(ws, p);
-  ws.ctx = { rm, p }; ws.isAlive = true;
-  ws.on('pong', () => ws.isAlive = true);
-  respawn(rm, p); rm.emptyAt = 0;
-  ws.send(JSON.stringify({
-    t: 'welcome', id: p.id, color, room: rm.code, seed: rm.game.seed, world: rm.game.world,
-    grace: GRACE, phase: rm.game.phase,
-    roster: pArr(rm).filter(q => q !== p).map(q => ({ id: q.id, name: q.name, color: q.color }))
-  }));
-  for (const [ws2, q] of rm.players) if (q !== p && ws2.readyState === 1) ws2.send(JSON.stringify({ t: 'peer', id: p.id, name, color }));
-}
-function leave(ws) {
-  const ctx = ws.ctx; if (!ctx) return;
-  const { rm, p } = ctx;
-  p.gone = true; dropFuse(rm, p); rm.players.delete(ws);
-  if (rm.game.creature.target === p) rm.game.creature.target = null;
-  sendAll(rm, { t: 'leave', id: p.id });
-  if (!rm.players.size) rm.emptyAt = Date.now();
-}
-function onMsg(ws, raw) {
-  let m; try { m = JSON.parse(raw); } catch { return; }
-  if (m.t === 'join') {
-    if (ws.ctx) return;
-    let code = String(m.room || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
-    let rm = code ? rooms.get(code) : null;
-    if (!rm) { code = code || genCode(); rm = createRoom(code); rooms.set(code, rm); }
-    if (rm.players.size >= MAX_PLAYERS) { ws.send(JSON.stringify({ t: 'full' })); return; }
-    join(rm, ws, m.name);
-    return;
-  }
-  const ctx = ws.ctx; if (!ctx) return;
-  const { rm, p } = ctx, g = rm.game;
-  if (m.t === 'input') Object.assign(p.input, { u: !!m.u, d: !!m.d, l: !!m.l, r: !!m.r, run: !!m.run, sneak: !!m.sneak, e: !!m.e, f: !!m.f });
-  else if (m.t === 'noise') {
-    if (p.state === 'dead' || g.phase !== 'play' || p.micCd > g.time) return;
-    p.micCd = g.time + 0.15;
-    emitNoise(rm, p.x, p.z, 0.45 + Math.min(1, Math.max(0, +m.v || 0)) * 2.3, 'voice', p);
-  } else if (m.t === 'throw') {
-    if (p.state !== 'alive' || p.rocks <= 0) return;
-    const len = Math.hypot(m.dx, m.dz) || 1, dx = m.dx / len, dz = m.dz / len;
-    p.rocks--; p.rockT = 0;
-    g.rocksAir.push({ x: p.x + dx * 0.5, z: p.z + dz * 0.5, vx: dx * 13, vz: dz * 13, life: 0.7 });
-    ev(rm, 'thrown', p.x, p.z, 0.2, p.id);
-    const e = g.events[g.events.length - 1]; e.dx = +dx.toFixed(2); e.dz = +dz.toFixed(2);
-  } else if (m.t === 'rtc') {
-    for (const [ws2, q] of rm.players) if (q.id === m.to && ws2.readyState === 1) {
-      ws2.send(JSON.stringify({ t: 'rtc', from: p.id, c: m.c }));
-      break;
-    }
-  }
-}
-
-netServer.listen(PORT, () => console.log('a quiet place → port ' + PORT));
+    updateRocks(rm, dt); updateCreature
