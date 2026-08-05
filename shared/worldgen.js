@@ -166,7 +166,7 @@
       if (Math.min(Math.abs(px - roadX(pz)), Math.abs(pz - roadZ(px))) < 18) continue;
       var okP = true;
       for (var b2 = 0; b2 < buildings.length; b2++) if (pointInRect(px, pz, buildings[b2], 26)) { okP = false; break; }
-      for (var v2 = 0; v2 < villages.length; v2++) if (Math.hypot(px - villages[v].x, pz - villages[v].z) < 60) okP = false;
+      for (var v2 = 0; v2 < villages.length; v2++) if (Math.hypot(px - villages[v2].x, pz - villages[v2].z) < 60) okP = false;
       if (okP) plane = { x: +px.toFixed(1), z: +pz.toFixed(1), rot: +(rnd() * 6.283).toFixed(2) };
     }
     if (plane) waypoints.push({ x: plane.x, z: plane.z });
