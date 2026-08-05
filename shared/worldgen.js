@@ -1,10 +1,10 @@
-/* shared/worldgen.js — deterministic world (Node + browser). Units: meters. */
+/* shared/worldgen.js — v3: villages, crashed plane, forest patches. Units: meters. */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.WorldGen = factory();
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
-  var SIZE = 1200, WALL_T = 0.3, DOOR_W = 1.6, PR = 0.5, CR = 0.6;
+  var SIZE = 1400, WALL_T = 0.3, DOOR_W = 1.6, PR = 0.5, CR = 0.6;
   var NIGHT = 300, DAY = 600;
 
   function mulberry32(seed) {
@@ -21,7 +21,6 @@
   function rectsOverlap(a, b, pad) { return a.x < b.x + b.w + pad && a.x + a.w + pad > b.x && a.z < b.z + b.h + pad && a.z + a.h + pad > b.z; }
   function pointInRect(px, pz, r, pad) { pad = pad || 0; return px > r.x - pad && px < r.x + r.w + pad && pz > r.z - pad && pz < r.z + r.h + pad; }
 
-  /* stable integer hash → value noise (same on server & client) */
   function h2(x, y) {
     var n = (x * 374761393 + y * 668265263) | 0;
     n = Math.imul(n ^ (n >>> 13), 1274126177);
@@ -33,8 +32,8 @@
     var a = h2(ix, iy), b = h2(ix + 1, iy), c = h2(ix, iy + 1), d = h2(ix + 1, iy + 1);
     return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
   }
-  function roadX(z) { return SIZE / 2 + Math.sin(z * 0.012) * 46; }
-  function roadZ(x) { return SIZE / 2 + Math.sin(x * 0.009) * 58; }
+  function roadX(z) { return SIZE / 2 + Math.sin(z * 0.011) * 52; }
+  function roadZ(x) { return SIZE / 2 + Math.sin(x * 0.008) * 66; }
   function height(x, z) {
     var n = vnoise(x * 0.008, z * 0.008) * 6 + vnoise(x * 0.03, z * 0.03) * 1.4 - 3;
     var rd = Math.min(Math.abs(x - roadX(z)), Math.abs(z - roadZ(x)));
@@ -44,6 +43,7 @@
     var flat = Math.min(f, pf);
     return n * (0.12 + 0.88 * flat * flat) - (1 - f) * 0.35;
   }
+  function forestN(x, z, off) { return vnoise(x * 0.004 + off, z * 0.004 - off) * 0.7 + vnoise(x * 0.013 + off, z * 0.013) * 0.3; }
 
   function circleRectResolve(px, pz, rad, rc) {
     var nx = clamp(px, rc.x, rc.x + rc.w), nz = clamp(pz, rc.z, rc.z + rc.h);
@@ -121,22 +121,59 @@
     var rnd = mulberry32(seed);
     var walls = [], doors = [], trees = [], fuses = [], waypoints = [], buildings = [];
     var plaza = { x: SIZE / 2, z: SIZE / 2, r: 30 };
+    var fOff = rnd() * 100;
 
-    for (var i = 0; i < 500 && buildings.length < 26; i++) {
-      var bw = 7 + rnd() * 7, bh = 6 + rnd() * 6;
-      var bx = 60 + rnd() * (SIZE - 120 - bw), bz = 60 + rnd() * (SIZE - 120 - bh);
-      var b = { x: +bx.toFixed(1), z: +bz.toFixed(1), w: +bw.toFixed(1), h: +bh.toFixed(1), i: buildings.length };
+    /* two villages */
+    var villages = [
+      { x: SIZE * 0.26 + rnd() * 40, z: SIZE * 0.3 + rnd() * 40 },
+      { x: SIZE * 0.74 - rnd() * 40, z: SIZE * 0.68 - rnd() * 40 }
+    ];
+
+    function houseAt(x, z, minW, maxW) {
+      var bw = minW + rnd() * (maxW - minW), bh = minW - 1 + rnd() * (maxW - minW);
+      var b = { x: +x.toFixed(1), z: +z.toFixed(1), w: +bw.toFixed(1), h: +bh.toFixed(1), i: buildings.length };
       var cx = b.x + b.w / 2, cz = b.z + b.h / 2;
-      if (Math.min(Math.abs(cx - roadX(cz)), Math.abs(cz - roadZ(cx))) < 16) continue;
-      if (Math.hypot(cx - plaza.x, cz - plaza.z) < 70) continue;
-      var ok = true;
-      for (var k = 0; k < buildings.length; k++) if (rectsOverlap(b, buildings[k], 14)) { ok = false; break; }
-      if (!ok) continue;
+      if (Math.min(Math.abs(cx - roadX(cz)), Math.abs(cz - roadZ(cx))) < 14) return null;
+      if (Math.hypot(cx - plaza.x, cz - plaza.z) < 70) return null;
+      for (var k = 0; k < buildings.length; k++) if (rectsOverlap(b, buildings[k], 10)) return null;
+      for (var v = 0; v < villages.length; v++) if (Math.hypot(cx - villages[v].x, cz - villages[v].z) < 12) return null;
       buildings.push(b);
       buildWalls(b, rnd, walls, doors);
+      return b;
     }
 
-    var chosen = shuffle(buildings.slice(), rnd).slice(0, Math.min(5, buildings.length));
+    /* village houses in a loose ring */
+    villages.forEach(function (v) {
+      var nH = 6 + ((rnd() * 2) | 0);
+      for (var i = 0; i < nH; i++) {
+        var a = (i / nH) * 6.283 + rnd() * 0.5;
+        var r = 16 + rnd() * 12;
+        houseAt(v.x + Math.cos(a) * r, v.z + Math.sin(a) * r, 6, 11);
+      }
+      waypoints.push({ x: v.x, z: v.z });
+    });
+    /* scattered abandoned farmhouses */
+    for (var i = 0; i < 90 && buildings.length < 40; i++) {
+      houseAt(70 + rnd() * (SIZE - 140), 70 + rnd() * (SIZE - 140), 6, 13);
+    }
+
+    /* crashed plane in a clearing */
+    var plane = null;
+    for (var pt = 0; pt < 80 && !plane; pt++) {
+      var px = 140 + rnd() * (SIZE - 280), pz = 140 + rnd() * (SIZE - 280);
+      if (forestN(px, pz, fOff) > 0.48) continue;
+      if (Math.hypot(px - plaza.x, pz - plaza.z) < 90) continue;
+      if (Math.min(Math.abs(px - roadX(pz)), Math.abs(pz - roadZ(px))) < 18) continue;
+      var okP = true;
+      for (var b2 = 0; b2 < buildings.length; b2++) if (pointInRect(px, pz, buildings[b2], 26)) { okP = false; break; }
+      for (var v2 = 0; v2 < villages.length; v2++) if (Math.hypot(px - villages[v].x, pz - villages[v].z) < 60) okP = false;
+      if (okP) plane = { x: +px.toFixed(1), z: +pz.toFixed(1), rot: +(rnd() * 6.283).toFixed(2) };
+    }
+    if (plane) waypoints.push({ x: plane.x, z: plane.z });
+
+    /* fuses: one at the wreck, rest in houses */
+    var chosen = shuffle(buildings.slice(), rnd).slice(0, 4);
+    fuses.push({ id: 0, x: plane ? +(plane.x + 4).toFixed(1) : plaza.x, z: plane ? +(plane.z + 3).toFixed(1) : plaza.z, b: -1 });
     for (var fi = 0; fi < chosen.length; fi++) {
       var bb = chosen[fi], fp = null;
       for (var t2 = 0; t2 < 16 && !fp; t2++) {
@@ -144,7 +181,7 @@
         for (var wi = 0; wi < walls.length; wi++) if (pointInRect(fx, fz, walls[wi], 0.8)) { clear = false; break; }
         if (clear) fp = { x: +fx.toFixed(1), z: +fz.toFixed(1) };
       }
-      if (fp) fuses.push({ id: fi, x: fp.x, z: fp.z, b: bb.i });
+      if (fp) fuses.push({ id: fi + 1, x: fp.x, z: fp.z, b: bb.i });
     }
 
     for (var di = 0; di < doors.length; di++) {
@@ -155,30 +192,33 @@
       waypoints.push({ x: +wx.toFixed(1), z: +wz.toFixed(1) });
     }
     for (var wp = 0; wp < 40; wp++) {
-      var px = 60 + rnd() * (SIZE - 120), pz = 60 + rnd() * (SIZE - 120), inside = false;
-      for (var bi = 0; bi < buildings.length; bi++) if (pointInRect(px, pz, buildings[bi], 4)) { inside = true; break; }
-      if (!inside) waypoints.push({ x: +px.toFixed(1), z: +pz.toFixed(1) });
+      var wpx = 60 + rnd() * (SIZE - 120), wpz = 60 + rnd() * (SIZE - 120), inside = false;
+      for (var bi = 0; bi < buildings.length; bi++) if (pointInRect(wpx, wpz, buildings[bi], 4)) { inside = true; break; }
+      if (!inside) waypoints.push({ x: +wpx.toFixed(1), z: +wpz.toFixed(1) });
     }
     var spawn = { x: plaza.x, z: plaza.z + plaza.r + 12 };
 
-    for (var ti = 0; ti < 2200 && trees.length < 420; ti++) {
-      var tx = 40 + rnd() * (SIZE - 80), tz = 40 + rnd() * (SIZE - 80), bad = false;
+    /* forest-patch trees */
+    for (var ti = 0; ti < 6000 && trees.length < 950; ti++) {
+      var tx = 40 + rnd() * (SIZE - 80), tz = 40 + rnd() * (SIZE - 80);
+      var fn = forestN(tx, tz, fOff);
+      if (fn < 0.42 && rnd() > 0.06) continue;               // dense woods + sparse field trees
+      if (fn > 0.42 && fn < 0.55 && rnd() > 0.35) continue;
+      var bad = false;
       if (Math.min(Math.abs(tx - roadX(tz)), Math.abs(tz - roadZ(tx))) < 7) bad = true;
       if (!bad && Math.hypot(tx - plaza.x, tz - plaza.z) < 45) bad = true;
+      if (!bad && plane && Math.hypot(tx - plane.x, tz - plane.z) < 24) bad = true;
       if (!bad) for (var bi2 = 0; bi2 < buildings.length; bi2++) if (pointInRect(tx, tz, buildings[bi2], 3)) { bad = true; break; }
-      if (!bad) for (var wp2 = 0; wp2 < waypoints.length; wp2++) {
-        var dwx = tx - waypoints[wp2].x, dwz = tz - waypoints[wp2].z;
-        if (dwx * dwx + dwz * dwz < 36) { bad = true; break; }
-      }
+      if (!bad) for (var vv = 0; vv < villages.length; vv++) if (Math.hypot(tx - villages[vv].x, tz - villages[vv].z) < 14) bad = true;
       if (!bad) { var dsx = tx - spawn.x, dsz = tz - spawn.z; if (dsx * dsx + dsz * dsz < 400) bad = true; }
-      if (!bad) trees.push({ x: +tx.toFixed(1), z: +tz.toFixed(1), r: 0.35, cr: +(2.2 + rnd() * 1.8).toFixed(1) });
+      if (!bad) trees.push({ x: +tx.toFixed(1), z: +tz.toFixed(1), r: 0.35, cr: +(2.2 + rnd() * 2.0).toFixed(1) });
     }
 
-    return { seed: seed, size: SIZE, plaza: plaza, buildings: buildings, walls: walls, doors: doors,
-             trees: trees, fuses: fuses, waypoints: waypoints, spawn: spawn };
+    return { seed: seed, size: SIZE, plaza: plaza, villages: villages, plane: plane, buildings: buildings,
+             walls: walls, doors: doors, trees: trees, fuses: fuses, waypoints: waypoints, spawn: spawn, fOff: fOff };
   }
 
   return { SIZE: SIZE, WALL_T: WALL_T, DOOR_W: DOOR_W, PR: PR, CR: CR, NIGHT: NIGHT, DAY: DAY,
            generate: generate, mulberry32: mulberry32, resolveCircle: resolveCircle, pointInRect: pointInRect,
-           height: height, roadX: roadX, roadZ: roadZ, vnoise: vnoise, clamp: clamp };
+           height: height, roadX: roadX, roadZ: roadZ, vnoise: vnoise, forestN: forestN, clamp: clamp };
 });
