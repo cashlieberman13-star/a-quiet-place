@@ -400,6 +400,15 @@ function rebuildSolids() {
 }
 function clientSolids() { return solidsCache || (rebuildSolids(), solidsCache); }
 function mergeGeoms(geoms) {
+  geoms = geoms.map(g => {
+    if (g.index === null || g.index === undefined) {   // ExtrudeGeometry is non-indexed
+      const n = g.attributes.position.count;
+      const arr = new Uint32Array(n);
+      for (let i = 0; i < n; i++) arr[i] = i;
+      g.setIndex(new THREE.BufferAttribute(arr, 1));
+    }
+    return g;
+  });
   let vc = 0, ic = 0;
   geoms.forEach(g => { vc += g.attributes.position.count; ic += g.index.count; });
   const pos = new Float32Array(vc * 3), nor = new Float32Array(vc * 3), uv = new Float32Array(vc * 2), idx = new Uint32Array(ic);
@@ -1036,9 +1045,8 @@ function applyCycle(t) {
   sun.color.lerpColors(new THREE.Color(0x7788aa), new THREE.Color(0xfff2d0), df);
   sun.position.set(local.x + 40, 70, local.z + 25);
   sun.target.position.set(local.x, 0, local.z);
-  stars.material.opacity = (1 - df) * 0.9;
-  stars.visible = df < 0.6;
-  moonSpr.material.opacity = 1 - df;
+  if (stars) { stars.material.opacity = (1 - df) * 0.9; stars.visible = df < 0.6; }
+  if (moonSpr) moonSpr.material.opacity = 1 - df;
   const flick = creatureDist < 12 ? (Math.random() < 0.14 ? 0.35 : 1) : 1;
   const on = flashOn && view && view.me && view.me.s < 2;
   spot.intensity = on ? 2.6 * flick * (1 - df * 0.85) : 0;
