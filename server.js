@@ -6,9 +6,9 @@ const { WebSocketServer } = require('ws');
 const WG = require('./shared/worldgen.js');
 
 const PORT = process.env.PORT || 3000;
-const TICK = 1 / 30, BCAST_EVERY = 2, MAX_PLAYERS = 8, GRACE = 12;
+const TICK = 1 / 30, BCAST_EVERY = 2, MAX_PLAYERS = 8, GRACE = 12, NUM_CREATURES = 10;
 const COLORS = ['#c9b27c','#8fae7e','#7d9dc4','#c48a8a','#a98fc4','#7fbcb2','#c49c7d','#9aa8b8'];
-const CSPD = { roam: 1.2, investigate: 2.8, search: 2.1, hunt: 5.5 };
+const CSPD = { roam: 1.2, investigate: 4.5, search: 2.1, hunt: 5.5 };
 const GAITS = { sneak: 1, walk: 2, run: 3 };
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8' };
 
@@ -18,6 +18,7 @@ const netServer = http.createServer((req, res) => {
   if (p === '/') file = 'public/index.html';
   else if (p === '/worldgen.js') file = 'shared/worldgen.js';
   else if (p === '/game.js') file = 'public/game.js';
+  if (p === '/health') { res.writeHead(200, { 'Content-Type': 'text/plain' }); return res.end('ALIVE ' + process.uptime().toFixed(0) + 's'); }
   if (!file) { res.writeHead(404); return res.end('404'); }
   fs.readFile(path.join(__dirname, file), (err, data) => {
     if (err) { res.writeHead(404); return res.end('404'); }
@@ -31,19 +32,33 @@ const dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 const R = v => Math.round(v * 10) / 10;
 const clampN = v => Math.max(-1, Math.min(1, v));
 
+function makeCreatures(world) {
+  const arr = [];
+  for (let i = 0; i < NUM_CREATURES; i++) {
+    let best = null, bestScore = -1;
+    for (let t = 0; t < 30; t++) {
+      const w = world.waypoints[(Math.random() * world.waypoints.length) | 0];
+      let score = dist(w, world.spawn);
+      for (const c of arr) score += Math.min(80, dist(w, c));
+      if (score > bestScore) { bestScore = score; best = w; }
+    }
+    arr.push({ id: i, x: best.x, z: best.z, dir: 0, state: 'roam', goal: null, target: null,
+      lastKnown: null, huntT: 0, searchT: 0, subT: 0, searchC: null, idleT: 0, attackCd: 0,
+      execT: 0, pauseT: 0, stuckT: 0, detourT: 0, detourSign: 1, senseT: 0, shriekCd: 0, roarT: 0, moving: 0 });
+  }
+  return arr;
+}
+
 function makeGame() {
   const seed = (Math.random() * 0xffffffff) >>> 0;
   const world = WG.generate(seed);
-  const far = world.waypoints.reduce((b, w) => dist(w, world.spawn) > dist(b, world.spawn) ? w : b, world.waypoints[0]);
   return {
     seed, world, time: 0, roundT: 0, phase: 'play', phaseT: 0,
     cyc: 'night', cycT: WG.NIGHT,
     doors: world.doors.map(rect => ({ rect, open: false, breachT: 0 })),
     fuses: world.fuses.map(f => ({ id: f.id, x: f.x, z: f.z, st: 'ground', heldBy: null })),
     genN: 0, genTotal: world.fuses.length,
-    creature: { x: far.x, z: far.z, dir: 0, state: 'roam', goal: null, target: null, lastKnown: null,
-      huntT: 0, searchT: 0, subT: 0, searchC: null, idleT: 0, attackCd: 0, execT: 0, pauseT: 0,
-      stuckT: 0, detourT: 0, detourSign: 1, senseT: 0, shriekCd: 0, roarT: 0 },
+    creatures: makeCreatures(world),
     rocksAir: [], events: [], solidsCache: null, solidsDirty: false
   };
 }
@@ -81,7 +96,10 @@ function nearestAlive(rm, x, z) {
 function hear(rm, x, z, i, src) {
   const g = rm.game;
   if (g.phase !== 'play' || g.time < GRACE) return;
-  const c = g.creature;
+  for (const c of g.creatures) hearOne(rm, c, x, z, i, src);
+}
+function hearOne(rm, c, x, z, i, src) {
+  const g = rm.game;
   if (g.cyc === 'day' && !(i >= 1.4 && Math.hypot(c.x - x, c.z - z) < 10)) return;
   if (src && src.state === 'down') i *= 1.35;
   const range = (4 + i * 9) * (c.state === 'hunt' ? 1.3 : 1);
@@ -196,8 +214,7 @@ function routeViaDoor(rm, c, goal) {
   return (best && bd > 1.2) ? best : goal;
 }
 
-function attackCheck(rm, dt) {
-  const c = rm.game.creature;
+function attackCheck(rm, c, dt) {
   for (const p of pArr(rm)) if (p.state === 'down' && dist(p, c) < 1.0) {
     c.execT += dt; c.pauseT = Math.max(c.pauseT, 0.06);
     if (c.execT > 0.9) { killPlayer(rm, p); c.execT = 0; c.pauseT = 1.3; }
@@ -213,14 +230,14 @@ function attackCheck(rm, dt) {
   }
 }
 
-function updateCreature(rm, dt) {
-  const g = rm.game, c = g.creature;
+function updateCreature(rm, c, dt) {
+  const g = rm.game;
   c.attackCd = Math.max(0, c.attackCd - dt);
   c.shriekCd = Math.max(0, c.shriekCd - dt);
   if (g.phase !== 'play' || c.pauseT > 0) { c.pauseT -= dt; return; }
   if (g.cyc === 'day' && c.state === 'hunt') { c.state = 'roam'; c.goal = null; c.target = null; }
   c.senseT -= dt;
-  if (c.senseT <= 0) { c.senseT = 0.55; for (const p of pArr(rm)) if (p.state === 'alive' && dist(p, c) < 2.5) { hear(rm, p.x, p.z, 0.32, p); break; } }
+  if (c.senseT <= 0) { c.senseT = 0.55; for (const p of pArr(rm)) if (p.state === 'alive' && dist(p, c) < 2.5) { hearOne(rm, c, p.x, p.z, 0.32, p); break; } }
   switch (c.state) {
     case 'roam':
       if (c.idleT > 0) { c.idleT -= dt; c.goal = null; break; }
@@ -249,9 +266,9 @@ function updateCreature(rm, dt) {
       break;
     }
   }
-  attackCheck(rm, dt);
+  attackCheck(rm, c, dt);
   let goal = c.state === 'hunt' && c.target ? c.goal : (c.goal || null);
-  if (!goal) return;
+  if (!goal) { c.moving = 0; return; }
   goal = routeViaDoor(rm, c, goal);
   const d = dist(c, goal) || 1;
   let dx = (goal.x - c.x) / d, dz = (goal.z - c.z) / d;
@@ -261,7 +278,7 @@ function updateCreature(rm, dt) {
   const res = WG.resolveCircle(c.x + dx * spd * dt, c.z + dz * spd * dt, WG.CR, solids(rm), g.world.trees, WG.SIZE);
   const moved = Math.hypot(res.x - c.x, res.z - c.z);
   c.x = res.x; c.z = res.z; c.dir = Math.atan2(dx, dz);
-  c.moving = moved > spd * dt * 0.4;
+  c.moving = moved > spd * dt * 0.4 ? 1 : 0;
   if (moved < spd * dt * 0.3 && spd > 0.2) {
     const hit = res.hits.find(h => h.door && !h.door.open);
     if (hit && c.state !== 'roam') {
@@ -292,11 +309,11 @@ function resetRound(rm) {
 }
 function sendAll(rm, msg) { const s = JSON.stringify(msg); for (const ws of rm.players.keys()) if (ws.readyState === 1) ws.send(s); }
 function broadcast(rm) {
-  const g = rm.game, c = g.creature;
+  const g = rm.game;
   sendAll(rm, {
     t: 'state', ph: g.phase, pt: Math.ceil(Math.max(0, g.phaseT)), gr: Math.max(0, Math.ceil(GRACE - g.time)),
     cyc: { c: g.cyc, t: Math.ceil(g.cycT) },
-    c: { x: R(c.x), z: R(c.z), d: +c.dir.toFixed(2), s: c.state, tg: c.target ? c.target.id : -1, m: c.moving ? 1 : 0 },
+    c: g.creatures.map(c => ({ x: R(c.x), z: R(c.z), d: +c.dir.toFixed(2), s: c.state, tg: c.target ? c.target.id : -1, m: c.moving })),
     p: pArr(rm).map(p => ({ id: p.id, x: R(p.x), z: R(p.z), d: +p.dir.toFixed(2),
       s: p.state === 'alive' ? 0 : p.state === 'hurt' ? 1 : p.state === 'down' ? 2 : 3,
       f: p.fuse != null ? 1 : 0, r: p.rocks, rv: +p.rv.toFixed(2), g: GAITS[p.gait] || 0, l: p.input.f ? 1 : 0 })),
@@ -323,7 +340,8 @@ function tick(rm) {
       if (p.rocks < 3) { p.rockT += dt; if (p.rockT >= 22) { p.rockT = 0; p.rocks++; } }
     }
     for (const p of pArr(rm)) if ((p.state === 'down' || p.state === 'hurt') && !p.rvActive) p.rv = Math.max(0, p.rv - dt * 0.08);
-    updateRocks(rm, dt); updateCreature(rm, dt);
+    updateRocks(rm, dt);
+    for (const c of g.creatures) updateCreature(rm, c, dt);
     const ps = pArr(rm);
     if (ps.length && ps.every(p => p.state === 'down' || p.state === 'dead')) { g.phase = 'lost'; g.phaseT = 30; ev(rm, 'lose', 0, 0, 0); }
   } else { g.phaseT -= dt; if (g.phaseT <= 0) resetRound(rm); }
@@ -361,7 +379,7 @@ function leave(ws) {
   const ctx = ws.ctx; if (!ctx) return;
   const { rm, p } = ctx;
   p.gone = true; dropFuse(rm, p); rm.players.delete(ws);
-  if (rm.game.creature.target === p) rm.game.creature.target = null;
+  for (const c of rm.game.creatures) if (c.target === p) c.target = null;
   sendAll(rm, { t: 'leave', id: p.id });
   if (!rm.players.size) rm.emptyAt = Date.now();
 }
@@ -405,5 +423,5 @@ function onMsg(ws, raw) {
 netServer.listen(PORT, () => console.log('a quiet place → port ' + PORT));
 
 // ==========================================================
-// === END OF SERVER.JS === (If you don't see this line, your copy-paste was cut off!)
+// === END OF SERVER.JS ===
 // ==========================================================
