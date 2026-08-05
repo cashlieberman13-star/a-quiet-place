@@ -42,7 +42,7 @@
   @keyframes flicker{0%,93%,95.5%,100%{opacity:1}94%,95%{opacity:.5}}
   .tag{font-size:14px;color:var(--dim);letter-spacing:.06em;text-align:center;max-width:560px}
   .tag em{color:var(--bone);font-style:normal}
-  .rules{display:flex;gap:22px;flex-wrap:wrap;justify-content:center;max-width:900px}
+  .rules{display:flex;gap:22px;flex-wrap:wrap;justify-content:center;max-width:940px}
   .rules div{font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:var(--dim);text-transform:uppercase;line-height:1.9;text-align:left}
   .rules b{color:var(--bone);font-weight:400}
   .rules .warn b{color:var(--red)}
@@ -56,6 +56,9 @@
   #obj b{color:var(--amber);font-weight:400} #obj .wake{color:var(--red)} #obj .room{color:var(--bone)}
   #clock{position:absolute;top:14px;left:50%;transform:translateX(-50%);font-size:12px;letter-spacing:.3em;text-transform:uppercase}
   #clock.night{color:var(--red)} #clock.day{color:var(--bone)}
+  #warn{position:absolute;top:52px;left:50%;transform:translateX(-50%);font-family:var(--disp);font-size:22px;
+    color:var(--red);opacity:0;letter-spacing:.2em;text-shadow:0 0 22px rgba(194,43,51,.9);text-transform:uppercase}
+  #warn.on{opacity:1;animation:blink .45s steps(2) infinite}
   #log{position:absolute;left:16px;bottom:64px;display:flex;flex-direction:column-reverse;gap:4px;max-width:380px}
   #log div{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--bone);background:rgba(2,3,8,.55);
     padding:4px 8px;border-left:2px solid rgba(216,212,200,.35);animation:logfade 9s forwards}
@@ -72,7 +75,6 @@
   #micFill{position:absolute;inset:1px auto 1px 1px;width:0%;background:#6f8f6a}
   #micThr{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--red);left:25%}
   #mic.hot #micFill{background:var(--red)}
-  #mic.off + .row .lbl{color:var(--red)}
   #rocksHud{position:absolute;right:16px;bottom:20px;font-size:10px;letter-spacing:.22em;color:var(--dim);text-transform:uppercase;text-align:right}
   #rocksHud i{display:inline-block;width:9px;height:9px;border:1px solid var(--dim);transform:rotate(45deg);margin-left:7px}
   #rocksHud i.full{background:var(--bone);border-color:var(--bone)}
@@ -85,12 +87,19 @@
   #banner.show{opacity:1} #banner.red{color:var(--red)}
   #pulse{position:fixed;inset:0;pointer-events:none;z-index:15;opacity:0;
     background:radial-gradient(ellipse at center,transparent 55%,rgba(150,20,26,.55) 100%)}
+  #hurtVig{position:fixed;inset:0;pointer-events:none;z-index:16;opacity:0;
+    background:radial-gradient(ellipse at center,transparent 42%,rgba(110,8,12,.8) 100%)}
+  #scare{position:fixed;inset:0;z-index:60;display:none;align-items:center;justify-content:center;background:#000}
+  #scare.on{display:flex}
+  #scare canvas{width:100%;height:100%;animation:scareIn .5s ease-out}
+  @keyframes scareIn{0%{transform:scale(2.4) rotate(2deg)}55%{transform:scale(1.02) rotate(-1deg)}100%{transform:scale(1.18)}}
   #lock{position:fixed;inset:0;z-index:25;display:flex;align-items:center;justify-content:center;
     font-family:var(--disp);letter-spacing:.4em;text-transform:uppercase;font-size:18px;color:var(--dim);
     background:rgba(2,3,8,.4);cursor:pointer}
   #end h2{font-family:var(--disp);font-size:clamp(30px,6vw,64px);letter-spacing:.24em;text-transform:uppercase}
   #end .sub{font-family:var(--mono);font-size:11px;letter-spacing:.3em;color:var(--dim);text-transform:uppercase}
   #end h2.red{color:var(--red)} #end h2.amber{color:var(--amber)}
+  #end .btnrow{display:flex;gap:18px}
 </style>
 </head>
 <body>
@@ -99,6 +108,7 @@
 <div id="hud" class="hidden">
   <div id="obj"></div>
   <div id="clock" class="night"></div>
+  <div id="warn">⚠ IT IS CLOSE</div>
   <canvas id="mini" width="150" height="150"></canvas>
   <div id="log"></div>
   <div id="prompt"></div>
@@ -111,6 +121,8 @@
   <div id="rocksHud">stones <i></i><i></i><i></i><br><span style="opacity:.6">click — throw decoy</span></div>
 </div>
 <div id="pulse"></div>
+<div id="hurtVig"></div>
+<div id="scare"><canvas id="scareCv" width="640" height="360"></canvas></div>
 <div id="banner"></div>
 <div id="lock" class="hidden">CLICK TO TAKE CONTROL</div>
 
@@ -119,7 +131,7 @@
   <div class="eyebrow">co-op survival · 1–8 per room · <b>● live audio feed</b></div>
   <h1>A Quiet<br>Place</h1>
   <div class="tag">It cannot see you. <em>It can hear everything.</em><br>
-    Your real microphone is wired into the dark. Friends near you are heard in 3D — whisper.</div>
+    Two villages. A downed plane. A dark wood. Your real microphone is wired into the night.</div>
   <div class="joinrow">
     <input type="text" id="name" maxlength="14" placeholder="YOUR NAME" autocomplete="off">
     <input type="text" id="room" maxlength="6" placeholder="ROOM CODE · BLANK = NEW" autocomplete="off">
@@ -127,8 +139,8 @@
   <button id="begin">Step into the dark</button>
   <div class="rules">
     <div><b>WASD</b> move · <b>MOUSE</b> look<br><b>SHIFT</b> sprint — loud<br><b>C</b> crouch — silent</div>
-    <div><b>F</b> flashlight · <b>E</b> use/revive<br><b>CLICK</b> throw stone — decoy<br><b>HEADPHONES</b> required</div>
-    <div class="warn"><b>NIGHT 5:00</b> — fuses surface, it hunts.<br><b>DAY 10:00</b> — it sleeps. move. insert.<br><b>SILENCE IS SURVIVAL.</b></div>
+    <div><b>F</b> flashlight · <b>E</b> use / patch<br><b>CLICK</b> throw stone — decoy<br><b>HEADPHONES</b> required</div>
+    <div class="warn"><b>NIGHT 5:00</b> — fuses surface, it hunts.<br><b>DAY 10:00</b> — it sleeps. move.<br><b>2 HITS</b> put you down. patch up.<br><b>ALL DOWN = GAME OVER.</b></div>
     <div><b>ROOMS</b> — blank code = new night.<br>share link <b>?room=CODE</b><br>voice fades with distance.</div>
   </div>
   <div class="foot">terrain · buildings · creature · sound — all generated in code, zero assets</div>
@@ -145,6 +157,7 @@
 <div id="end" class="screen hidden">
   <h2 id="endTitle"></h2>
   <div class="sub" id="endSub"></div>
+  <div class="btnrow"><button id="menuBtn">Return to menu</button></div>
 </div>
 
 <script src="https://unpkg.com/three@0.149.0/build/three.min.js"></script>
